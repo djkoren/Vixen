@@ -17,6 +17,9 @@ namespace VixenModules.App.ColorGradients
 		private ColorPicker.Mode _mode = ColorPicker.Mode.HSV_RGB;
 		private ColorPicker.Fader _fader = ColorPicker.Fader.HSV_H;
 
+		// Set while the "Hide Marks" checkbox is being seeded from the saved preference.
+		private bool _suppressHideMarksEvent;
+
 		#endregion
 
 		public GradientEditPanel()
@@ -25,9 +28,24 @@ namespace VixenModules.App.ColorGradients
 			ThemeUpdateControls.UpdateControls(this);
 			edit.SelectionDoubleClicked += edit_SelectionDoubleClicked;
 			LockColorEditorHSV_Value = false;
+
+			// Mark visibility is shared with the curve editor and persisted; seed the control without
+			// re-writing the preference.
+			_suppressHideMarksEvent = true;
+			chkHideMarks.Checked = MarkOverlayPreferences.HideMarks;
+			_suppressHideMarksEvent = false;
 		}
 
 		#region handlers
+
+		//marks overlay visibility toggled
+		private void chkHideMarks_CheckedChanged(object sender, EventArgs e)
+		{
+			if (_suppressHideMarksEvent) return;
+
+			MarkOverlayPreferences.HideMarks = chkHideMarks.Checked;
+			edit.Invalidate();
+		}
 
 		//updates all controls
 		private void UpdateUI()

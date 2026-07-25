@@ -19,6 +19,9 @@ namespace VixenModules.App.Curves
 		private System.Windows.Forms.Timer _startupMouseInputTimer;
 		private static readonly Logger Logging = LogManager.GetCurrentClassLogger();
 
+		// Set while the "Hide Marks" checkbox is being seeded from the saved preference.
+		private bool _suppressHideMarksEvent;
+
 		// Bezier handle dragging state
 		private bool _isDraggingHandle;
 		private int _dragHandlePointIndex = -1;
@@ -75,6 +78,12 @@ namespace VixenModules.App.Curves
 			zedGraphControl.GraphPane.Border = new Border(ThemeColorTable.BackgroundColor, 0);
 
 			zedGraphControl.GraphPane.AxisChange();
+
+			// Mark visibility is shared with the gradient editor and persisted, so pick it up here and
+			// suppress the change handler while seeding the control.
+			_suppressHideMarksEvent = true;
+			chkHideMarks.Checked = MarkOverlayPreferences.HideMarks;
+			_suppressHideMarksEvent = false;
 
 			// Add waveform/marks when the dialog is shown (after properties are set by caller)
 			this.Shown += (s, ev) => AddWaveformAndMarksToGraph();
@@ -496,6 +505,7 @@ namespace VixenModules.App.Curves
 				btnReverse.Enabled = true;
 				labelInstructions1.Visible = true;
 				labelInstructions2.Visible = true;
+				labelInstructions3.Visible = true;
 				txtXValue.Enabled = false;
 				txtYValue.Enabled = false;
 				txtXValue.Text = string.Empty;
@@ -528,6 +538,7 @@ namespace VixenModules.App.Curves
 				btnReverse.Enabled = !curve.IsLibraryReference;
 				labelInstructions1.Visible = !curve.IsLibraryReference;
 				labelInstructions2.Visible = !curve.IsLibraryReference;
+				labelInstructions3.Visible = !curve.IsLibraryReference;
 				txtYValue.Enabled = !curve.IsLibraryReference;
 				txtXValue.Enabled = !curve.IsLibraryReference;
 				txtXValue.Text = string.Empty;
@@ -786,6 +797,14 @@ namespace VixenModules.App.Curves
 			e.Handled = !char.IsDigit(e.KeyChar) && !char.IsControl(e.KeyChar);
 		}
 
+		private void chkHideMarks_CheckedChanged(object sender, EventArgs e)
+		{
+			if (_suppressHideMarksEvent) return;
+
+			MarkOverlayPreferences.HideMarks = chkHideMarks.Checked;
+			AddWaveformAndMarksToGraph();
+		}
+
 		private void textBoxThreshold_TextChanged(object sender, EventArgs e)
 		{
 			if (textBoxThreshold.Text == "") return;
@@ -862,11 +881,12 @@ namespace VixenModules.App.Curves
 			}
 
 			// Add marks as vertical lines
-			if (MarkPositions != null && MarkPositions.Count > 0)
+			if (MarkPositions != null && MarkPositions.Count > 0 && !MarkOverlayPreferences.HideMarks)
 			{
-				foreach (var (position, color) in MarkPositions)
+				Color markColor = Color.FromArgb(170, MarkOverlayPreferences.MarkColor);
+				foreach (var (position, _) in MarkPositions)
 				{
-					var line = new LineObj(Color.FromArgb(80, color), position, 100, position, 0);
+					var line = new LineObj(markColor, position, 100, position, 0);
 					line.Line.Width = 1f;
 					line.Line.Style = System.Drawing.Drawing2D.DashStyle.Dash;
 					line.Location.CoordinateFrame = CoordType.AxisXYScale;
@@ -936,17 +956,9 @@ namespace VixenModules.App.Curves
 					PointPairList pointList = zedGraphControl.GraphPane.CurveList[0].Points as PointPairList;
 					if (pointList != null && pointIndex >= 0 && pointIndex < pointList.Count)
 					{
-						// Debug: directly set Tag and check
-						var pt = pointList[pointIndex];
-						string beforeTag = pt.Tag == null ? "null" : pt.Tag.GetType().Name;
-
 						ToggleBezierHandles(pointList, pointIndex);
 						UpdateHandleGraphObjects();
 					}
-				}
-				else
-				{
-					MessageBox.Show("Right-click detected but no point found nearby.", "Bezier Debug");
 				}
 			}
 		}
@@ -1089,37 +1101,42 @@ namespace VixenModules.App.Curves
 					pane.GraphObjList.RemoveAt(i);
 			}
 
-			if (pane.CurveList.Count == 0) return;
-			PointPairList pointList = pane.CurveList[0].Points as PointPairList;
-			if (pointList == null || !pointList.HasBezierData()) return;
+			PointPairList pointList = pane.CurveList.Count > 0 ? pane.CurveList[0].Points as PointPairList : null;
 
-			const double GripSize = 2.0; // in curve-space units
-
-			for (int i = 0; i < pointList.Count; i++)
+			if (pointList != null && pointList.HasBezierData())
 			{
-				var handleData = pointList[i].Tag as BezierHandleData;
-				if (handleData == null) continue;
+				const double GripSize = 2.0; // in curve-space units
 
-				double ptX = pointList[i].X;
-				double ptY = pointList[i].Y;
-
-				// Draw in-handle
-				if (handleData.HasInHandle)
+				for (int i = 0; i < pointList.Count; i++)
 				{
-					double gripX = Math.Max(0, Math.Min(100, ptX + handleData.InHandleX));
-					double gripY = Math.Max(0, Math.Min(100, ptY + handleData.InHandleY));
-					AddHandleGraphObjects(pane, ptX, ptY, gripX, gripY, GripSize);
-				}
+					var handleData = pointList[i].Tag as BezierHandleData;
+					if (handleData == null) continue;
 
-				// Draw out-handle
-				if (handleData.HasOutHandle)
-				{
-					double gripX = Math.Max(0, Math.Min(100, ptX + handleData.OutHandleX));
-					double gripY = Math.Max(0, Math.Min(100, ptY + handleData.OutHandleY));
-					AddHandleGraphObjects(pane, ptX, ptY, gripX, gripY, GripSize);
+					double ptX = pointList[i].X;
+					double ptY = pointList[i].Y;
+
+					// Draw in-handle
+					if (handleData.HasInHandle)
+					{
+						double gripX = Math.Max(0, Math.Min(100, ptX + handleData.InHandleX));
+						double gripY = Math.Max(0, Math.Min(100, ptY + handleData.InHandleY));
+						AddHandleGraphObjects(pane, ptX, ptY, gripX, gripY, GripSize);
+					}
+
+					// Draw out-handle
+					if (handleData.HasOutHandle)
+					{
+						double gripX = Math.Max(0, Math.Min(100, ptX + handleData.OutHandleX));
+						double gripY = Math.Max(0, Math.Min(100, ptY + handleData.OutHandleY));
+						AddHandleGraphObjects(pane, ptX, ptY, gripX, gripY, GripSize);
+					}
 				}
 			}
 
+			// Repaint unconditionally. Removing the last handle on the curve leaves nothing to draw, and
+			// returning early here meant the control was never invalidated: the handles stayed on screen
+			// until some later event (such as dragging a point) forced a redraw, which looked like the
+			// right click had not taken effect.
 			zedGraphControl.Invalidate();
 		}
 

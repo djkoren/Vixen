@@ -33,6 +33,7 @@ namespace VixenModules.App.Curves
 			this.buttonCancel = new System.Windows.Forms.Button();
 			this.labelInstructions1 = new System.Windows.Forms.Label();
 			this.labelInstructions2 = new System.Windows.Forms.Label();
+			this.labelInstructions3 = new System.Windows.Forms.Label();
 			this.groupBoxLibrary = new System.Windows.Forms.GroupBox();
 			this.buttonEditLibraryCurve = new System.Windows.Forms.Button();
 			this.buttonUnlinkCurve = new System.Windows.Forms.Button();
@@ -43,6 +44,7 @@ namespace VixenModules.App.Curves
 			this.xLabel = new System.Windows.Forms.Label();
 			this.grpCurve = new System.Windows.Forms.GroupBox();
 			this.btnFunctionCurve = new System.Windows.Forms.Button();
+			this.chkHideMarks = new System.Windows.Forms.CheckBox();
 			this.textBoxThreshold = new System.Windows.Forms.TextBox();
 			this.label1 = new System.Windows.Forms.Label();
 			this.btnDraw = new System.Windows.Forms.Button();
@@ -62,7 +64,7 @@ namespace VixenModules.App.Curves
 			// 
 			this.buttonOK.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Right)));
 			this.buttonOK.DialogResult = System.Windows.Forms.DialogResult.OK;
-			this.buttonOK.Location = new System.Drawing.Point(370, 718);
+			this.buttonOK.Location = new System.Drawing.Point(370, 740);
 			this.buttonOK.Name = "buttonOK";
 			this.buttonOK.Size = new System.Drawing.Size(93, 29);
 			this.buttonOK.TabIndex = 2;
@@ -78,7 +80,7 @@ namespace VixenModules.App.Curves
 			this.buttonCancel.FlatAppearance.MouseDownBackColor = System.Drawing.Color.Transparent;
 			this.buttonCancel.FlatAppearance.MouseOverBackColor = System.Drawing.Color.Transparent;
 			this.buttonCancel.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
-			this.buttonCancel.Location = new System.Drawing.Point(470, 718);
+			this.buttonCancel.Location = new System.Drawing.Point(470, 740);
 			this.buttonCancel.Name = "buttonCancel";
 			this.buttonCancel.Size = new System.Drawing.Size(93, 29);
 			this.buttonCancel.TabIndex = 3;
@@ -104,9 +106,19 @@ namespace VixenModules.App.Curves
 			this.labelInstructions2.Size = new System.Drawing.Size(184, 15);
 			this.labelInstructions2.TabIndex = 6;
 			this.labelInstructions2.Text = "Hold down Alt to remove a point.";
-			// 
+			//
+			// labelInstructions3
+			//
+			this.labelInstructions3.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
+			this.labelInstructions3.AutoSize = true;
+			this.labelInstructions3.Location = new System.Drawing.Point(24, 754);
+			this.labelInstructions3.Name = "labelInstructions3";
+			this.labelInstructions3.Size = new System.Drawing.Size(262, 15);
+			this.labelInstructions3.TabIndex = 5;
+			this.labelInstructions3.Text = "Right click a point to add or remove a Bezier handle.";
+			//
 			// groupBoxLibrary
-			// 
+			//
 			this.groupBoxLibrary.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
 			this.groupBoxLibrary.Controls.Add(this.buttonEditLibraryCurve);
@@ -196,6 +208,7 @@ namespace VixenModules.App.Curves
 			// grpCurve
 			// 
 			this.grpCurve.Controls.Add(this.btnFunctionCurve);
+			this.grpCurve.Controls.Add(this.chkHideMarks);
 			this.grpCurve.Controls.Add(this.textBoxThreshold);
 			this.grpCurve.Controls.Add(this.label1);
 			this.grpCurve.Controls.Add(this.btnDraw);
@@ -225,9 +238,21 @@ namespace VixenModules.App.Curves
 			this.btnFunctionCurve.Text = "f(x) Curve";
 			this.btnFunctionCurve.UseVisualStyleBackColor = false;
 			this.btnFunctionCurve.Click += new System.EventHandler(this.btnFunctionCurve_Click);
-			// 
+			//
+			// chkHideMarks
+			//
+			this.chkHideMarks.AutoSize = true;
+			this.chkHideMarks.Location = new System.Drawing.Point(213, 62);
+			this.chkHideMarks.Name = "chkHideMarks";
+			this.chkHideMarks.Size = new System.Drawing.Size(88, 19);
+			this.chkHideMarks.TabIndex = 20;
+			this.chkHideMarks.Text = "Hide Marks";
+			this.chkHideMarks.UseVisualStyleBackColor = true;
+			this.toolTip.SetToolTip(this.chkHideMarks, "Hide the mark lines drawn behind the curve");
+			this.chkHideMarks.CheckedChanged += new System.EventHandler(this.chkHideMarks_CheckedChanged);
+			//
 			// textBoxThreshold
-			// 
+			//
 			this.textBoxThreshold.Location = new System.Drawing.Point(297, 24);
 			this.textBoxThreshold.Margin = new System.Windows.Forms.Padding(3, 2, 3, 2);
 			this.textBoxThreshold.Name = "textBoxThreshold";
@@ -374,17 +399,18 @@ namespace VixenModules.App.Curves
 			this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
 			this.AutoSize = true;
 			this.CancelButton = this.buttonCancel;
-			this.ClientSize = new System.Drawing.Size(575, 750);
+			this.ClientSize = new System.Drawing.Size(575, 772);
 			this.Controls.Add(this.grpCurve);
 			this.Controls.Add(this.groupBoxLibrary);
 			this.Controls.Add(this.labelInstructions1);
 			this.Controls.Add(this.labelInstructions2);
+			this.Controls.Add(this.labelInstructions3);
 			this.Controls.Add(this.buttonCancel);
 			this.Controls.Add(this.buttonOK);
 			this.Controls.Add(this.zedGraphControl);
 			this.DoubleBuffered = true;
 			this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog;
-			this.MinimumSize = new System.Drawing.Size(591, 784);
+			this.MinimumSize = new System.Drawing.Size(591, 806);
 			this.Name = "CurveEditor";
 			this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
 			this.Text = "Curve Editor";
@@ -404,6 +430,8 @@ namespace VixenModules.App.Curves
 		private System.Windows.Forms.Button buttonCancel;
 		private System.Windows.Forms.Label labelInstructions1;
 		private System.Windows.Forms.Label labelInstructions2;
+		private System.Windows.Forms.Label labelInstructions3;
+		private System.Windows.Forms.CheckBox chkHideMarks;
 		private System.Windows.Forms.GroupBox groupBoxLibrary;
 		private System.Windows.Forms.Button buttonUnlinkCurve;
 		private System.Windows.Forms.Label labelCurve;

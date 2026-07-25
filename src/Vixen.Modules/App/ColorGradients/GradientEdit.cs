@@ -353,7 +353,7 @@ namespace VixenModules.App.ColorGradients
 			}
 
 			// Draw mark lines on top of everything
-			if (MarkPositions != null && MarkPositions.Count > 0)
+			if (MarkPositions != null && MarkPositions.Count > 0 && !Common.Controls.MarkOverlayPreferences.HideMarks)
 			{
 				Rectangle markArea = new Rectangle(_border, _border,
 				                               this.Width - _border * 2 - 1, this.Height - _border * 3 - 1);
@@ -371,7 +371,9 @@ namespace VixenModules.App.ColorGradients
 				var savedSmoothing2 = e.Graphics.SmoothingMode;
 				e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
-				foreach (var (position, color) in MarkPositions)
+				Color markFill = Color.FromArgb(230, Common.Controls.MarkOverlayPreferences.MarkColor);
+
+				foreach (var (position, _) in MarkPositions)
 				{
 					int screenX = markArea.Left + (int)Math.Round(position / 100.0 * markArea.Width);
 
@@ -393,8 +395,8 @@ namespace VixenModules.App.ColorGradients
 						{
 							e.Graphics.DrawPath(outlinePen, path);
 						}
-						// White fill
-						using (var fillBrush = new SolidBrush(Color.FromArgb(210, 255, 255, 255)))
+						// Light yellow fill
+						using (var fillBrush = new SolidBrush(markFill))
 						{
 							e.Graphics.FillPath(fillBrush, path);
 						}

@@ -36,6 +36,7 @@
 			label5 = new Label();
 			vColorLoc = new Common.Controls.ControlsEx.ValueControls.ValueUpDown();
 			btnDeleteColor = new Button();
+			chkHideMarks = new CheckBox();
 			edit = new GradientEdit();
 			grpStops.SuspendLayout();
 			flowLayoutPanel1.SuspendLayout();
@@ -56,6 +57,7 @@
 			flowLayoutPanel1.Controls.Add(label5);
 			flowLayoutPanel1.Controls.Add(vColorLoc);
 			flowLayoutPanel1.Controls.Add(btnDeleteColor);
+			flowLayoutPanel1.Controls.Add(chkHideMarks);
 			resources.ApplyResources(flowLayoutPanel1, "flowLayoutPanel1");
 			flowLayoutPanel1.Name = "flowLayoutPanel1";
 			// 
@@ -89,9 +91,21 @@
 			btnDeleteColor.Name = "btnDeleteColor";
 			btnDeleteColor.UseVisualStyleBackColor = false;
 			btnDeleteColor.Click += btnDeleteColor_Click;
-			// 
+			//
+			// chkHideMarks
+			//
+			chkHideMarks.Anchor = AnchorStyles.Top;
+			chkHideMarks.AutoSize = true;
+			chkHideMarks.ImeMode = ImeMode.NoControl;
+			chkHideMarks.Margin = new Padding(18, 9, 4, 3);
+			chkHideMarks.Name = "chkHideMarks";
+			chkHideMarks.TabIndex = 2;
+			chkHideMarks.Text = "Hide Marks";
+			chkHideMarks.UseVisualStyleBackColor = true;
+			chkHideMarks.CheckedChanged += chkHideMarks_CheckedChanged;
+			//
 			// edit
-			// 
+			//
 			resources.ApplyResources(edit, "edit");
 			edit.Name = "edit";
 			edit.SelectionChanged += edit_GradientChanged;
@@ -118,6 +132,7 @@
 		private Common.Controls.ColorManagement.ColorPicker.ColorLabel lblColorSelect;
 		private Common.Controls.ControlsEx.ValueControls.ValueUpDown vColorLoc;
 		private System.Windows.Forms.Button btnDeleteColor;
+		private System.Windows.Forms.CheckBox chkHideMarks;
 		private System.Windows.Forms.Label label5;
 		private System.Windows.Forms.Label label4;
 		private GradientEdit edit;
