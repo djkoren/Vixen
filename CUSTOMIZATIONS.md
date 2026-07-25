@@ -77,11 +77,11 @@ lights, 1 just before it goes dark — with nothing layered on top, so a rising 
 off and a curve peaking in the middle fades both ways. Everything is laid out on the step grid, which
 is what keeps every group at the same point in the fade (otherwise a chase appears to run *through*
 the pattern) and keeps exactly `Lights On` LEDs lit at every instant. **Randomness** displaces whole
-groups rather than individual LEDs, bounded by the gap so groups can never merge. **Crawl** (new, off
-by default, with its own Speed and Wave Length) sends a travelling wave along the groups so they
-surge in sequence — a centipede gait rather than randomness's static uneven spacing. It runs off
-elapsed time, so it keeps crawling with Speed at 0, and the two share one gap budget that guarantees
-a dark LED always survives between groups. **Fit To Element** (new, off by default) spreads the
+groups rather than individual LEDs, bounded by the gap so groups can never merge. **Ripples** (new, off by
+default, with just a count and a speed) send pulses along the groups: each shoves a group forward one
+step, and the group then holds until the next ripple reaches it. That stepping is real movement, so
+with Speed at 0 the ripples are the only motion and a group genuinely sits still between shoves. The
+two share one gap budget that guarantees a dark LED always survives between groups. **Fit To Element** (new, off by default) spreads the
 pattern so a whole number of groups spans the element, giving even spacing and a seamless wrap.
 
 These are behavior changes: a saved sequence with `Advance By > 1` or `Randomness > 0` will look

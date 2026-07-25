@@ -43,11 +43,11 @@ namespace VixenModules.Effect.Marquee
 		/// </summary>
 		private const double MaxOffsetGapFraction = 0.5;
 
-		/// <summary>Slowest crawl in wave cycles per second.</summary>
-		private const double MinCrawlHz = 0.05;
+		/// <summary>Slowest ripple rate in cycles per second.</summary>
+		private const double MinRippleHz = 0.05;
 
-		/// <summary>Fastest crawl in wave cycles per second.</summary>
-		private const double MaxCrawlHz = 4.0;
+		/// <summary>Fastest ripple rate in cycles per second.</summary>
+		private const double MaxRippleHz = 6.0;
 
 		#endregion
 
@@ -91,21 +91,24 @@ namespace VixenModules.Effect.Marquee
 		/// <summary>Maximum per group timing offset in LED units (0 when Randomness is off).</summary>
 		private double _jitterAmount;
 
-		/// <summary>Peak crawl displacement in LED units (0 when Crawl is off).</summary>
-		private double _crawlAmount;
+		/// <summary>How far a ripple shoves a group, in LED units (0 when ripples are off).</summary>
+		private double _rippleStep;
 
-		/// <summary>Crawl rate in wave cycles per second.</summary>
-		private double _crawlHz;
+		/// <summary>Ripple rate in cycles per second.</summary>
+		private double _rippleHz;
 
-		/// <summary>How many groups one crawl wave spans.</summary>
-		private double _crawlWaveGroups;
+		/// <summary>How many groups sit between one ripple and the next.</summary>
+		private double _rippleGroups;
 
 		/// <summary>
-		/// How far the crawl wave has advanced, in cycles, at the frame being rendered. Driven by
-		/// elapsed time rather than by <see cref="_phase"/>, so the crawl runs at its own rate and keeps
-		/// rippling even when the pattern is not moving.
+		/// How many ripples have passed, at the frame being rendered. Driven by elapsed time rather than
+		/// by travel, so the ripples run at their own rate and are the pattern's only motion when Speed
+		/// is zero - which is what lets a group actually sit still between shoves.
 		/// </summary>
-		private double _crawlPhase;
+		private double _ripplePhase;
+
+		/// <summary>Scroll position contributed by the speed curve alone, before the ripples add theirs.</summary>
+		private double _scrollPhase;
 
 		private bool _moveAlongX;
 		private double _dirSign;
@@ -310,66 +313,46 @@ namespace VixenModules.Effect.Marquee
 		}
 
 		/// <summary>
-		/// Gets or sets the strength of the crawl, 0 to 100. Groups surge forward and back in sequence,
-		/// each lagging the one before it, so the surge travels along the pattern.
+		/// Gets or sets how many ripples travel along the element at once. Each ripple shoves every group
+		/// it reaches forward by one step, so groups advance in sequence and then hold until the next
+		/// ripple arrives. 0 turns ripples off.
 		/// </summary>
 		[Value]
 		[ProviderCategory(@"Config", 1)]
-		[ProviderDisplayName(@"Crawl")]
-		[ProviderDescription(@"Groups surge in sequence, like a centipede.  Needs a gap to move in.")]
-		[PropertyEditor("SliderEditor")]
-		[NumberRange(0, 100, 1)]
+		[ProviderDisplayName(@"Ripples")]
+		[ProviderDescription(@"Ripples running along the element.  Each one shoves a group forward a step.")]
 		[PropertyOrder(7)]
-		public int Crawl
+		public int Ripples
 		{
-			get { return _data.Crawl; }
+			get { return _data.Ripples; }
 			set
 			{
-				_data.Crawl = value;
-				UpdateCrawlAttributes();
+				if (value < 0) value = 0;
+				_data.Ripples = value;
+				UpdateRippleAttributes();
 				IsDirty = true;
 				OnPropertyChanged();
 			}
 		}
 
 		/// <summary>
-		/// Gets or sets how fast the crawl surge travels, 0 to 100. Independent of <see cref="SpeedCurve"/>,
-		/// so the pattern can crawl while standing still.
+		/// Gets or sets how fast a ripple travels, 0 to 100. Independent of <see cref="SpeedCurve"/>: with
+		/// Speed at zero the ripples are the only motion, which is what lets a group sit still between
+		/// shoves instead of gliding through the pause.
 		/// </summary>
 		[Value]
 		[ProviderCategory(@"Config", 1)]
-		[ProviderDisplayName(@"Crawl Speed")]
-		[ProviderDescription(@"How fast the surge travels.")]
+		[ProviderDisplayName(@"Ripple Speed")]
+		[ProviderDescription(@"How fast the ripples run.")]
 		[PropertyEditor("SliderEditor")]
 		[NumberRange(0, 100, 1)]
 		[PropertyOrder(8)]
-		public int CrawlSpeed
+		public int RippleSpeed
 		{
-			get { return _data.CrawlSpeed; }
+			get { return _data.RippleSpeed; }
 			set
 			{
-				_data.CrawlSpeed = value;
-				IsDirty = true;
-				OnPropertyChanged();
-			}
-		}
-
-		/// <summary>
-		/// Gets or sets how many groups one crawl surge spans. Low values scuttle, high values give a long
-		/// slow body wave. Minimum 2.
-		/// </summary>
-		[Value]
-		[ProviderCategory(@"Config", 1)]
-		[ProviderDisplayName(@"Wave Length")]
-		[ProviderDescription(@"How many groups one surge spans.")]
-		[PropertyOrder(9)]
-		public int CrawlWaveLength
-		{
-			get { return _data.CrawlWaveLength; }
-			set
-			{
-				if (value < 2) value = 2;
-				_data.CrawlWaveLength = value;
+				_data.RippleSpeed = value;
 				IsDirty = true;
 				OnPropertyChanged();
 			}
@@ -517,46 +500,37 @@ namespace VixenModules.Effect.Marquee
 
 			_period = _periodBanks * _fadeGroup;
 
-			_crawlWaveGroups = Math.Max(2, CrawlWaveLength);
-			_crawlHz = CrawlSpeed <= 0
+			// Ripples are spread over the element, so the count is what the eye sees travelling along it
+			// however long the prop is: one ripple sweeps end to end, four chase each other.
+			int rippleAxisLength = _moveAlongX ? BufferWi : BufferHt;
+			double totalGroups = _period > 0.0 ? rippleAxisLength / _period : 1.0;
+			_rippleGroups = Math.Max(1.0, totalGroups / Math.Max(1, Ripples));
+			_rippleHz = RippleSpeed <= 0
 				? 0.0
-				: MinCrawlHz * Math.Pow(MaxCrawlHz / MinCrawlHz, Math.Min(100, CrawlSpeed) / 100.0);
+				: MinRippleHz * Math.Pow(MaxRippleHz / MinRippleHz, Math.Min(100, RippleSpeed) / 100.0);
 
-			// Randomness and crawl both displace groups, and between them they must not close the gap, or
-			// two groups run together and the lit count stops matching Lights On.  They share one closure
-			// budget, split in proportion to the two sliders so that either alone gets the full range.
+			// Randomness and the ripples both displace groups, and between them they must not close the
+			// gap, or two groups run together and the lit count stops matching Lights On.
 			//
-			// The budget is what is left of the gap once one bank is set aside.  Not overlapping is not
-			// enough: LEDs are discrete, so if the dark space between two groups shrinks below one bank no
+			// The budget is what is left of the gap once one step is set aside.  Not overlapping is not
+			// enough: LEDs are discrete, so if the dark space between two groups shrinks below one step no
 			// LED lands in it and they read as a single run even though the maths never overlapped them.
-			// Keeping a bank in reserve guarantees a dark LED always survives between groups.
+			// Keeping a step in reserve guarantees a dark LED always survives between groups.
 			//
-			// The budget is spent per unit of amplitude at a different rate for each, because what costs
-			// gap is how far a group moves *relative to its neighbour*.  Two random neighbours can sit at
-			// opposite extremes, so a unit of amplitude costs two units of gap.  Crawl neighbours are one
-			// step apart on the wave, so they cost 2*sin(pi/WaveLength) -- a short wave puts neighbours in
-			// opposition and is expensive, a long wave moves them almost together and is nearly free.
-			// That is why a long wave is allowed a much bigger swing before the absolute cap takes over.
+			// Ripples are served first because their shove is a fixed quantum rather than a slider - one
+			// step, the same unit the whole pattern is built on.  Whatever the ripples do not need is left
+			// to randomness, which costs two units of gap per unit of amplitude because two neighbours can
+			// sit at opposite extremes of their range at the same time.
 			double gap = Math.Max(0.0, _period - _litWidth);
 			double closureBudget = Math.Max(0.0, gap - _fadeGroup) * GapClosureMargin;
-			double offsetCap = gap * MaxOffsetGapFraction;
 
-			double randomWeight = Math.Max(0, Randomness) / 100.0;
-			double crawlWeight = Math.Max(0, Crawl) / 100.0;
-			double totalWeight = randomWeight + crawlWeight;
-			if (totalWeight > 1.0)
-			{
-				randomWeight /= totalWeight;
-				crawlWeight /= totalWeight;
-			}
+			_rippleStep = Ripples <= 0 ? 0.0 : Math.Min(_fadeGroup, closureBudget);
 
 			const double randomGapCost = 2.0;
-			double crawlGapCost = 2.0 * Math.Sin(Math.PI / _crawlWaveGroups);
-
-			_jitterAmount = Math.Min(randomWeight * closureBudget / randomGapCost, randomWeight * offsetCap);
-			_crawlAmount = crawlGapCost <= 0.0
-				? 0.0
-				: Math.Min(crawlWeight * closureBudget / crawlGapCost, crawlWeight * offsetCap);
+			double randomWeight = Math.Min(100, Math.Max(0, Randomness)) / 100.0;
+			double randomBudget = Math.Max(0.0, closureBudget - _rippleStep);
+			_jitterAmount = Math.Min(randomWeight * randomBudget / randomGapCost,
+				randomWeight * gap * MaxOffsetGapFraction);
 
 			// Pre-sample the fade curve into a lookup table.
 			_lutSize = 257;
@@ -664,26 +638,34 @@ namespace VixenModules.Effect.Marquee
 		#region Private Methods
 
 		/// <summary>
-		/// Advances the continuous scroll position and the crawl wave for the specified frame.
+		/// Advances the scroll position and the ripples for the specified frame.
 		/// </summary>
 		/// <param name="frame">Current frame number</param>
 		private void UpdatePhase(int frame)
 		{
-			// The crawl runs at a constant rate, so it is computed straight from the frame number rather
-			// than accumulated -- no drift, and it needs no reset between target nodes.
-			_crawlPhase = frame * (FrameTime / 1000.0) * _crawlHz;
+			// The ripples run at a constant rate, so their count is computed straight from the frame
+			// number rather than accumulated -- no drift, and it needs no reset between target nodes.
+			_ripplePhase = frame * (FrameTime / 1000.0) * _rippleHz;
 
 			if (frame == 0)
 			{
 				// Restart at the beginning of the pattern.  RenderEffect is called for frame 0 first for every
 				// target node, so resetting here keeps the movement deterministic.
-				_phase = 0.0;
-				return;
+				_scrollPhase = 0.0;
+			}
+			else
+			{
+				double intervalPos = GetEffectTimeIntervalPosition(frame) * 100.0;
+				double ledsPerSecond = SpeedToLedsPerSecond(SpeedCurve.GetValue(intervalPos));
+				_scrollPhase += ledsPerSecond * (FrameTime / 1000.0);
 			}
 
-			double intervalPos = GetEffectTimeIntervalPosition(frame) * 100.0;
-			double ledsPerSecond = SpeedToLedsPerSecond(SpeedCurve.GetValue(intervalPos));
-			_phase += ledsPerSecond * (FrameTime / 1000.0);
+			// Every ripple shoves every group it passes forward by a step, so on average the ripples carry
+			// the whole pattern along at one step per ripple.  That average is real movement and belongs in
+			// the scroll; what is left over per group -- whether it has been shoved yet or is still waiting
+			// -- is the stagger, and lives in GroupRipple.  Splitting it this way is what lets a group sit
+			// genuinely still between shoves rather than drifting through the pause.
+			_phase = _scrollPhase + _rippleStep * _ripplePhase;
 		}
 
 		/// <summary>
@@ -724,27 +706,31 @@ namespace VixenModules.Effect.Marquee
 		}
 
 		/// <summary>
-		/// Crawl displacement for a whole lit group, in LED units.
+		/// Ripple displacement for a whole lit group, in LED units.
 		/// </summary>
 		/// <remarks>
-		/// Each group lags the one before it by a fixed slice of the cycle, so instead of every group
-		/// swinging together the surge travels along the chain - a metachronal wave, which is what a
-		/// centipede's legs do and what makes the pattern read as walking rather than sliding. The wave
-		/// runs backwards along the chain relative to travel, matching the retrograde gait real
-		/// centipedes use. Unlike the randomizer this is a function of time as well as of the group, so
-		/// it keeps moving even when the pattern itself is stationary.
+		/// A group is either waiting for the next ripple or has already been shoved by it, and this is
+		/// which of the two - a staircase, not a wave. That is the whole point: a group holds position,
+		/// gets shoved forward a step, then holds again until the next ripple reaches it. A smooth wave
+		/// cannot do that, because it is never not moving.
+		///
+		/// The staircase counts ripples, so on its own it would climb forever. The part that climbs is
+		/// identical for every group and is real forward movement, so <see cref="UpdatePhase"/> puts it in
+		/// the scroll; subtracting it here leaves only the bounded stagger of who has been shoved and who
+		/// has not. The group's place in the queue is taken modulo the ripple spacing, which keeps the
+		/// stagger periodic instead of stretching the pattern out along its length.
 		/// </remarks>
 		/// <param name="group">Index of the group within the scrolling pattern</param>
-		/// <returns>Displacement in LED units</returns>
-		private double GroupCrawl(long group)
+		/// <returns>Displacement in LED units, within one step either side of nominal</returns>
+		private double GroupRipple(long group)
 		{
-			if (_crawlAmount <= 0.0)
+			if (_rippleStep <= 0.0)
 			{
 				return 0.0;
 			}
 
-			double cycles = _crawlPhase - group / _crawlWaveGroups;
-			return Math.Sin(cycles * 2.0 * Math.PI) * _crawlAmount;
+			double placeInQueue = Mod(group, _rippleGroups) / _rippleGroups;
+			return _rippleStep * (Math.Floor(_ripplePhase - placeInQueue) - _ripplePhase + 1.0);
 		}
 
 		/// <summary>
@@ -758,8 +744,8 @@ namespace VixenModules.Effect.Marquee
 		/// makes the spacing alternate between the floor and the ceiling of the pitch when
 		/// <see cref="FitToElement"/> makes that fractional, which is the closest an evenly spaced pattern
 		/// can get on a discrete strip, and it still lands the last group on the end of the element.
-		/// Randomness and crawl are added afterwards and are deliberately not snapped - putting groups out
-		/// of step with each other is the whole point of them.
+		/// Randomness and the ripples are added afterwards and are deliberately not snapped - putting
+		/// groups out of step with each other is the whole point of them.
 		/// </remarks>
 		/// <param name="group">Index of the group within the scrolling pattern</param>
 		/// <returns>Position of the group's leading edge in pattern space</returns>
@@ -767,7 +753,7 @@ namespace VixenModules.Effect.Marquee
 		{
 			// Floor(x + 0.5) rather than Math.Round: banker's rounding would pull every other exact half
 			// the wrong way and make the spacing lumpy.
-			return Math.Floor(group * _periodBanks + 0.5) * _fadeGroup + GroupJitter(group) + GroupCrawl(group);
+			return Math.Floor(group * _periodBanks + 0.5) * _fadeGroup + GroupJitter(group) + GroupRipple(group);
 		}
 
 		/// <summary>
@@ -960,21 +946,20 @@ namespace VixenModules.Effect.Marquee
 		private void InitAllAttributes()
 		{
 			UpdateStringOrientationAttributes(true);
-			UpdateCrawlAttributes(false);
+			UpdateRippleAttributes(false);
 			TypeDescriptor.Refresh(this);
 		}
 
 		/// <summary>
-		/// Updates the visibility of the crawl attributes. The speed and wave length only mean anything
-		/// once the crawl is turned up, so they stay out of the way until then.
+		/// Updates the visibility of the ripple attributes. The speed only means anything once at least
+		/// one ripple is asked for, so it stays out of the way until then.
 		/// </summary>
 		/// <param name="refresh">True to refresh the type descriptor after updating visibility</param>
-		private void UpdateCrawlAttributes(bool refresh = true)
+		private void UpdateRippleAttributes(bool refresh = true)
 		{
-			Dictionary<string, bool> propertyStates = new Dictionary<string, bool>(2)
+			Dictionary<string, bool> propertyStates = new Dictionary<string, bool>(1)
 			{
-				{ nameof(CrawlSpeed), Crawl > 0 },
-				{ nameof(CrawlWaveLength), Crawl > 0 },
+				{ nameof(RippleSpeed), Ripples > 0 },
 			};
 			SetBrowsable(propertyStates);
 			if (refresh)

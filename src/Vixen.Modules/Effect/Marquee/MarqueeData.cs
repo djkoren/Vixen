@@ -31,11 +31,10 @@ namespace VixenModules.Effect.Marquee
 			FadeCurve = new Curve(new PointPairList(new[] { 0.0, 100.0 }, new[] { 100.0, 100.0 }));
 			LevelCurve = new Curve(new PointPairList(new[] { 0.0, 100.0 }, new[] { 100.0, 100.0 }));
 			Randomness = 0;
-			// Crawl is off by default so it never changes an existing look; the speed and wave length
-			// only come into play once it is turned up.
-			Crawl = 0;
-			CrawlSpeed = 30;
-			CrawlWaveLength = 4;
+			// Ripples are off by default so they never change an existing look; the speed only comes
+			// into play once at least one ripple is asked for.
+			Ripples = 0;
+			RippleSpeed = 40;
 			Orientation = StringOrientation.Horizontal;
 		}
 
@@ -77,19 +76,16 @@ namespace VixenModules.Effect.Marquee
 		public int Randomness { get; set; }
 
 		/// <summary>
-		/// Strength of the crawl, 0 to 100. Groups surge forward and back in sequence, each lagging the
-		/// one before it, so the surge travels along the pattern.
+		/// How many ripples travel along the element at once. Each ripple shoves every group it reaches
+		/// forward by one step, so groups advance in sequence and hold until the next one arrives.
+		/// 0 turns ripples off.
 		/// </summary>
 		[DataMember]
-		public int Crawl { get; set; }
+		public int Ripples { get; set; }
 
-		/// <summary>How fast the surge travels, 0 to 100. Independent of <see cref="SpeedCurve"/>.</summary>
+		/// <summary>How fast a ripple travels, 0 to 100. Independent of <see cref="SpeedCurve"/>.</summary>
 		[DataMember]
-		public int CrawlSpeed { get; set; }
-
-		/// <summary>How many groups one surge spans. Minimum 2.</summary>
-		[DataMember]
-		public int CrawlWaveLength { get; set; }
+		public int RippleSpeed { get; set; }
 
 		[DataMember]
 		public StringOrientation Orientation { get; set; }
@@ -113,12 +109,9 @@ namespace VixenModules.Effect.Marquee
 				FadeGroup = 1;
 			}
 
-			// Sequences saved before Crawl existed deserialize with a zero wave length, which would
-			// divide by zero in the wave. Crawl itself defaults to 0 on those, so this only matters if
-			// the slider is later turned up.
-			if (CrawlWaveLength < 2)
+			if (Ripples < 0)
 			{
-				CrawlWaveLength = 2;
+				Ripples = 0;
 			}
 
 			if (LevelCurve == null)
@@ -147,9 +140,8 @@ namespace VixenModules.Effect.Marquee
 				FadeCurve = new Curve(FadeCurve),
 				LevelCurve = new Curve(LevelCurve),
 				Randomness = Randomness,
-				Crawl = Crawl,
-				CrawlSpeed = CrawlSpeed,
-				CrawlWaveLength = CrawlWaveLength,
+				Ripples = Ripples,
+				RippleSpeed = RippleSpeed,
 				Orientation = Orientation,
 			};
 			return result;
