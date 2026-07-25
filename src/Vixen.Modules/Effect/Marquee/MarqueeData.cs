@@ -31,6 +31,11 @@ namespace VixenModules.Effect.Marquee
 			FadeCurve = new Curve(new PointPairList(new[] { 0.0, 100.0 }, new[] { 100.0, 100.0 }));
 			LevelCurve = new Curve(new PointPairList(new[] { 0.0, 100.0 }, new[] { 100.0, 100.0 }));
 			Randomness = 0;
+			// Crawl is off by default so it never changes an existing look; the speed and wave length
+			// only come into play once it is turned up.
+			Crawl = 0;
+			CrawlSpeed = 30;
+			CrawlWaveLength = 4;
 			Orientation = StringOrientation.Horizontal;
 		}
 
@@ -71,6 +76,21 @@ namespace VixenModules.Effect.Marquee
 		[DataMember]
 		public int Randomness { get; set; }
 
+		/// <summary>
+		/// Strength of the crawl, 0 to 100. Groups surge forward and back in sequence, each lagging the
+		/// one before it, so the surge travels along the pattern.
+		/// </summary>
+		[DataMember]
+		public int Crawl { get; set; }
+
+		/// <summary>How fast the surge travels, 0 to 100. Independent of <see cref="SpeedCurve"/>.</summary>
+		[DataMember]
+		public int CrawlSpeed { get; set; }
+
+		/// <summary>How many groups one surge spans. Minimum 2.</summary>
+		[DataMember]
+		public int CrawlWaveLength { get; set; }
+
 		[DataMember]
 		public StringOrientation Orientation { get; set; }
 
@@ -91,6 +111,14 @@ namespace VixenModules.Effect.Marquee
 			if (FadeGroup < 1)
 			{
 				FadeGroup = 1;
+			}
+
+			// Sequences saved before Crawl existed deserialize with a zero wave length, which would
+			// divide by zero in the wave. Crawl itself defaults to 0 on those, so this only matters if
+			// the slider is later turned up.
+			if (CrawlWaveLength < 2)
+			{
+				CrawlWaveLength = 2;
 			}
 
 			if (LevelCurve == null)
@@ -119,6 +147,9 @@ namespace VixenModules.Effect.Marquee
 				FadeCurve = new Curve(FadeCurve),
 				LevelCurve = new Curve(LevelCurve),
 				Randomness = Randomness,
+				Crawl = Crawl,
+				CrawlSpeed = CrawlSpeed,
+				CrawlWaveLength = CrawlWaveLength,
 				Orientation = Orientation,
 			};
 			return result;
