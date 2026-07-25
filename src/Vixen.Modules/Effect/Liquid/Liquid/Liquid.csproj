@@ -23,7 +23,11 @@
 				<ProjectReference Include="..\..\..\Media\Audio\Audio.csproj" />
 				<ProjectReference Include="..\..\Effect\Effect.csproj" />
 				<ProjectReference Include="..\Emitter\Emitter.csproj" />
-				<ProjectReference Include="..\LiquidFunWrapper\LiquidLiquidFunWrapper.vcxproj" />
+				<Reference Include="Module.Effect.LiquidLiquidFunWrapper" Condition="'$(UsePrebuiltNative)' == 'true'">
+					<HintPath>$(SolutionDir)build-native\Module.Effect.LiquidLiquidFunWrapper.dll</HintPath>
+					<Private>true</Private>
+				</Reference>
+				<ProjectReference Include="..\LiquidFunWrapper\LiquidLiquidFunWrapper.vcxproj" Condition="'$(UsePrebuiltNative)' != 'true'" />
 		</ItemGroup>
 
 </Project>

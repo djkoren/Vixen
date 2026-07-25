@@ -9,7 +9,11 @@
     <ProjectReference Include="..\..\..\Vixen.Common\Controls\Controls.csproj" />
     <ProjectReference Include="..\..\..\Vixen.Core\Vixen.Core.csproj" />
     <ProjectReference Include="..\..\Media\Audio\Audio.csproj" />
-    <ProjectReference Include="..\QMLibrary\QMLibrary.vcxproj" />
+    <Reference Include="QMLibrary" Condition="'$(UsePrebuiltNative)' == 'true'">
+      <HintPath>$(SolutionDir)build-native\QMLibrary.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <ProjectReference Include="..\QMLibrary\QMLibrary.vcxproj" Condition="'$(UsePrebuiltNative)' != 'true'" />
   </ItemGroup>
 
 		<ItemGroup>
