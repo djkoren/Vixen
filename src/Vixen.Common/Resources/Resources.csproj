@@ -358,6 +358,8 @@
 				<None Include="arrow_out.png" />
 				<None Include="arrow_refresh_small.png" />
 				<None Include="arrow_repeat.png" />
+				<None Include="timecode_chase.png" />
+				<None Include="timecode_chase_settings.png" />
 				<None Include="arrow_repeat_once.png" />
 				<None Include="arrow_rotate_anticlockwise.png" />
 				<None Include="arrow_rotate_clockwise.png" />

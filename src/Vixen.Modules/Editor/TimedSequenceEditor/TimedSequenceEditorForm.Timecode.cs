@@ -2,7 +2,9 @@ using System;
 using System.Drawing;
 using System.Windows.Forms;
 using Common.Controls;
+using Common.Resources.Properties;
 using VixenModules.Editor.TimedSequenceEditor.Timecode;
+using Timer = System.Windows.Forms.Timer;
 
 namespace VixenModules.Editor.TimedSequenceEditor
 {
@@ -17,6 +19,15 @@ namespace VixenModules.Editor.TimedSequenceEditor
 		private ToolStripButton _chaseButton;
 		private ToolStripButton _chaseSettingsButton;
 		private ToolStripStatusLabel _chaseStatusLabel;
+
+		/// <summary>
+		/// Refreshes the status readout. The controller's own status callback only fires a few times a
+		/// second, which is far too coarse for a frame counter, so the label is repainted from a UI
+		/// timer instead and reads the source's interpolated position directly.
+		/// </summary>
+		private Timer _chaseDisplayTimer;
+
+		private string _chaseStatusText = string.Empty;
 
 		private bool _chaseArmed;
 		private bool _suppressChaseToggle;
@@ -34,8 +45,10 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			{
 				Name = "playBackToolStripButton_ChaseTimecode",
 				CheckOnClick = true,
-				DisplayStyle = ToolStripItemDisplayStyle.Text,
-				Text = "TC",
+				DisplayStyle = ToolStripItemDisplayStyle.Image,
+				Image = Resources.timecode_chase,
+				ImageTransparentColor = Color.Magenta,
+				Text = "Timecode",
 				ToolTipText = "Chase external MIDI timecode",
 				Tag = "ChaseTimecode"
 			};
@@ -44,8 +57,10 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			_chaseSettingsButton = new ToolStripButton
 			{
 				Name = "playBackToolStripButton_ChaseTimecodeSettings",
-				DisplayStyle = ToolStripItemDisplayStyle.Text,
-				Text = "TC…",
+				DisplayStyle = ToolStripItemDisplayStyle.Image,
+				Image = Resources.timecode_chase_settings,
+				ImageTransparentColor = Color.Magenta,
+				Text = "TC Settings",
 				ToolTipText = "Timecode chase settings",
 				Tag = "ChaseTimecodeSettings"
 			};
@@ -59,14 +74,22 @@ namespace VixenModules.Editor.TimedSequenceEditor
 				owner.Items.Insert(idx + 2, _chaseSettingsButton);
 			}
 
+			// A fixed width keeps the status strip from re-flowing every time a digit changes, which is
+			// what made the readout look like it was stuttering even when the clock was steady.
 			_chaseStatusLabel = new ToolStripStatusLabel
 			{
 				Name = "toolStripStatusLabel_chase",
 				Text = string.Empty,
+				AutoSize = false,
+				Width = 230,
+				TextAlign = ContentAlignment.MiddleLeft,
 				BorderSides = ToolStripStatusLabelBorderSides.Left,
 				Margin = new Padding(8, 1, 0, 1)
 			};
 			statusStrip?.Items.Add(_chaseStatusLabel);
+
+			_chaseDisplayTimer = new Timer(components) { Interval = 25 };
+			_chaseDisplayTimer.Tick += ChaseDisplayTimer_Tick;
 		}
 
 		private void toolStripButton_ChaseTimecode_CheckedChanged(object sender, EventArgs e)
@@ -120,7 +143,6 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			_chaseController.ChaseHoldRequested += Chase_Hold;
 			_chaseController.ChaseStopRequested += Chase_Stop;
 			_chaseController.ChaseRePrimeRequested += Chase_RePrime;
-			_chaseController.StatusChanged += Chase_StatusChanged;
 
 			_chaseArmed = true;
 
@@ -132,12 +154,15 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			}
 
 			_chaseController.Start();
+			_chaseDisplayTimer?.Start();
+			UpdateChaseStatusLabel();
 			return true;
 		}
 
 		private void DisarmChase()
 		{
 			_chaseArmed = false;
+			_chaseDisplayTimer?.Stop();
 
 			try
 			{
@@ -157,7 +182,6 @@ namespace VixenModules.Editor.TimedSequenceEditor
 				_chaseController.ChaseHoldRequested -= Chase_Hold;
 				_chaseController.ChaseStopRequested -= Chase_Stop;
 				_chaseController.ChaseRePrimeRequested -= Chase_RePrime;
-				_chaseController.StatusChanged -= Chase_StatusChanged;
 				_chaseController.Dispose();
 				_chaseController = null;
 			}
@@ -176,6 +200,7 @@ namespace VixenModules.Editor.TimedSequenceEditor
 
 			if (_chaseStatusLabel != null)
 			{
+				_chaseStatusText = string.Empty;
 				_chaseStatusLabel.Text = string.Empty;
 			}
 		}
@@ -187,15 +212,48 @@ namespace VixenModules.Editor.TimedSequenceEditor
 				? _chaseSource.Position
 				: (TimeSpan?)null;
 
+			// The decoder captures the device, frame-rate mode and freewheel window when it is opened, so
+			// a change to any of them needs the source rebuilt. Offset and latency trim are read live off
+			// the settings object and need no restart.
+			string previousDevice = settings.MidiInputDeviceName;
+			TimecodeFrameRateMode previousRateMode = settings.FrameRateMode;
+			int previousFreewheel = settings.FreewheelFrames;
+
 			using (var dlg = new TimecodeChaseSettingsForm(settings, currentTc))
 			{
-				if (dlg.ShowDialog(this) == DialogResult.OK)
+				if (dlg.ShowDialog(this) != DialogResult.OK)
 				{
-					settings.Save(TimecodeChaseSettings.SettingsPath);
-					_chaseSettings = settings;
-					// Device/frame-rate changes take effect the next time chase is armed.
+					return;
 				}
 			}
+
+			settings.Save(TimecodeChaseSettings.SettingsPath);
+			_chaseSettings = settings;
+
+			bool decoderChanged = !string.Equals(previousDevice, settings.MidiInputDeviceName, StringComparison.Ordinal)
+			                      || previousRateMode != settings.FrameRateMode
+			                      || previousFreewheel != settings.FreewheelFrames;
+
+			if (_chaseArmed && decoderChanged)
+			{
+				ReArmChase();
+			}
+		}
+
+		/// <summary>
+		/// Rebuilds the timecode source in place so a settings change applies without the user having to
+		/// toggle chase off and on. Leaves chase disarmed (and the toolbar button unchecked) if the
+		/// device cannot be reopened.
+		/// </summary>
+		private void ReArmChase()
+		{
+			DisarmChase();
+
+			if (ArmChase()) return;
+
+			_suppressChaseToggle = true;
+			if (_chaseButton != null) _chaseButton.Checked = false;
+			_suppressChaseToggle = false;
 		}
 
 		#region Controller callbacks (raised off the UI thread; marshal before touching the UI/transport)
@@ -221,11 +279,6 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			MarshalToUi(() => _chaseExecutor?.RePrime());
 		}
 
-		private void Chase_StatusChanged(object sender, TimecodeStatus status)
-		{
-			MarshalToUi(() => UpdateChaseStatusLabel(status));
-		}
-
 		#endregion
 
 		private void MarshalToUi(Action action)
@@ -241,12 +294,34 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			}
 		}
 
-		private void UpdateChaseStatusLabel(TimecodeStatus s)
+		private void ChaseDisplayTimer_Tick(object sender, EventArgs e)
+		{
+			UpdateChaseStatusLabel();
+		}
+
+		/// <summary>
+		/// Repaints the timecode readout from the live decoder state. Called from a UI timer rather than
+		/// the controller's status callback so the frame field ticks at the incoming rate instead of the
+		/// controller's much slower status interval. The text is only assigned when it actually changes,
+		/// so a held clock costs nothing.
+		/// </summary>
+		private void UpdateChaseStatusLabel()
 		{
 			if (_chaseStatusLabel == null) return;
 
+			var source = _chaseSource;
+			if (!_chaseArmed || source == null)
+			{
+				if (_chaseStatusText.Length == 0) return;
+				_chaseStatusText = string.Empty;
+				_chaseStatusLabel.Text = string.Empty;
+				return;
+			}
+
+			TimecodeFrameRate rate = source.FrameRate;
+
 			string state;
-			switch (s.State)
+			switch (source.State)
 			{
 				case TimecodeState.Running: state = "LOCKED"; break;
 				case TimecodeState.Freewheeling: state = "FREEWHEEL"; break;
@@ -254,24 +329,15 @@ namespace VixenModules.Editor.TimedSequenceEditor
 				default: state = "NO TC"; break;
 			}
 
-			_chaseStatusLabel.Text = string.Format("TC: {0}  {1}  {2}", state, FormatTc(s.Incoming), FrameRateText(s.FrameRate));
-		}
+			// In auto-detect mode the rate is a placeholder until a whole timecode word has been read, so
+			// show that rather than a number the master has not actually claimed.
+			string rateText = source.IsFrameRateKnown ? rate.DisplayName() : "--";
 
-		private static string FormatTc(TimeSpan ts)
-		{
-			if (ts < TimeSpan.Zero) ts = TimeSpan.Zero;
-			return string.Format("{0}:{1:00}:{2:00}.{3:000}", (int)ts.TotalHours, ts.Minutes, ts.Seconds, ts.Milliseconds);
-		}
+			string text = string.Format("TC: {0}  {1}  {2}", state, rate.ToSmpteString(source.Position), rateText);
+			if (string.Equals(text, _chaseStatusText, StringComparison.Ordinal)) return;
 
-		private static string FrameRateText(TimecodeFrameRate rate)
-		{
-			switch (rate)
-			{
-				case TimecodeFrameRate.Fps24: return "24";
-				case TimecodeFrameRate.Fps25: return "25";
-				case TimecodeFrameRate.Fps2997Drop: return "29.97DF";
-				default: return "30";
-			}
+			_chaseStatusText = text;
+			_chaseStatusLabel.Text = text;
 		}
 	}
 }
