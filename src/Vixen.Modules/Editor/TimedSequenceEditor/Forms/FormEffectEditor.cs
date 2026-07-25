@@ -57,23 +57,7 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			};
 			_selectionChangeBuffer.Tick += _selectionChangeBuffer_Tick;
 
-			// Store the sequence's audio and marks for use by the CurveEditor waveform/marks display
-			if (sequenceEditorForm.Sequence != null)
-			{
-				var allMedia = sequenceEditorForm.Sequence.GetAllMedia();
-				if (allMedia != null)
-				{
-					var audioMedia = allMedia.FirstOrDefault() as VixenModules.Media.Audio.Audio;
-					if (audioMedia != null)
-					{
-						VixenModules.Editor.EffectEditor.Editors.CurveEditor.ActiveSequenceAudio = audioMedia;
-					}
-				}
-
-				// Store mark collections from the sequence
-				VixenModules.Editor.EffectEditor.Editors.CurveEditor.ActiveMarkCollections =
-					sequenceEditorForm.Sequence.LabeledMarkCollections;
-			}
+			UpdateCurveEditorContext();
 
 			sequenceEditorForm.TimelineControl.SelectionChanged += timelineControl_SelectionChanged;
 			_effectPropertyEditorGridEffectEffectPropertiesEditor.PropertyValueChanged += EffectPropertyEditorValueChanged;
@@ -89,9 +73,40 @@ namespace VixenModules.Editor.TimedSequenceEditor
 				_elements.Clear();
 				_elements.AddRange(value);
 				SetPreviewState();
-				
+
+				// Refresh here rather than only in the constructor: this form is often built by the
+				// docking layout restore, before a sequence has been assigned, in which case the
+				// constructor call is a no-op and the curve editor would never get a waveform.
+				UpdateCurveEditorContext();
+
 				_effectPropertyEditorGridEffectEffectPropertiesEditor.SelectedObjects = _elements.Select(x => x.EffectNode.Effect).ToArray();
-			} 
+			}
+		}
+
+		/// <summary>
+		/// Publishes the current sequence's audio and mark collections to the curve editor, which
+		/// draws them as the waveform backdrop and mark lines behind the curve.
+		/// </summary>
+		private void UpdateCurveEditorContext()
+		{
+			var sequence = _sequenceEditorForm?.Sequence;
+			if (sequence == null) return;
+
+			try
+			{
+				// OfType, not FirstOrDefault+cast: a sequence can carry non-audio media, and taking
+				// the first one blindly yields null whenever audio isn't first in the collection.
+				VixenModules.Editor.EffectEditor.Editors.CurveEditor.ActiveSequenceAudio =
+					sequence.GetAllMedia()?.OfType<VixenModules.Media.Audio.Audio>().FirstOrDefault();
+
+				VixenModules.Editor.EffectEditor.Editors.CurveEditor.ActiveMarkCollections =
+					sequence.LabeledMarkCollections;
+			}
+			catch (Exception ex)
+			{
+				// Never let the waveform backdrop break effect editing.
+				Logging.Warn(ex, "Unable to publish sequence audio/marks to the curve editor.");
+			}
 		}
 
 		/// <summary> 
