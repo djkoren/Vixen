@@ -49,7 +49,7 @@ namespace VixenModules.Editor.TimedSequenceEditor
 				Image = Resources.timecode_chase,
 				ImageTransparentColor = Color.Magenta,
 				Text = "Timecode",
-				ToolTipText = "Chase external MIDI timecode",
+				ToolTipText = "Follow external timecode with timeline playback",
 				Tag = "ChaseTimecode"
 			};
 			_chaseButton.CheckedChanged += toolStripButton_ChaseTimecode_CheckedChanged;
@@ -61,7 +61,7 @@ namespace VixenModules.Editor.TimedSequenceEditor
 				Image = Resources.timecode_chase_settings,
 				ImageTransparentColor = Color.Magenta,
 				Text = "TC Settings",
-				ToolTipText = "Timecode chase settings",
+				ToolTipText = "Timecode settings",
 				Tag = "ChaseTimecodeSettings"
 			};
 			_chaseSettingsButton.Click += (s, e) => OpenChaseSettings();
