@@ -380,6 +380,34 @@ namespace VixenModules.Preview.VixenPreview.GDIPreview
 			}		
 		}
 
+		/// <summary>
+		/// Returns a clone of the current preview bitmap (useful for video export).
+		/// Must be called after UpdatePreview() to get the latest rendered frame.
+		/// </summary>
+		public Bitmap CaptureBitmap()
+		{
+			lock (GDIControl.FastPixelLock)
+			{
+				var src = gdiControl.FastPixel?.Bitmap;
+				if (src == null) return null;
+				// Clone so the caller can keep using it after the next paint cycle
+				return (Bitmap)src.Clone();
+			}
+		}
+
+		/// <summary>
+		/// Gets the preview rendering size (matches FastPixel dimensions).
+		/// </summary>
+		public Size PreviewRenderSize
+		{
+			get
+			{
+				var fp = gdiControl.FastPixel;
+				if (fp != null) return new Size(fp.Width, fp.Height);
+				return new Size(gdiControl.Width, gdiControl.Height);
+			}
+		}
+
 		private void UpdateElementPixels(Element element)
 		{
 			if (element.State.Count > 0)

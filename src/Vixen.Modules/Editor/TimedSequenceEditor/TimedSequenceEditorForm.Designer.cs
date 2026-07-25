@@ -51,6 +51,7 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			this.delay60SecondsToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 			this.toolStripSeparator16 = new System.Windows.Forms.ToolStripSeparator();
 			this.exportToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
+			this.exportPreviewVideoToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
 			this.toolStripSeparator1 = new System.Windows.Forms.ToolStripSeparator();
 			this.toolStripMenuItem_Close = new System.Windows.Forms.ToolStripMenuItem();
 			this.editToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
@@ -383,6 +384,7 @@ namespace VixenModules.Editor.TimedSequenceEditor
             this.playbackToolStripMenuItem,
             this.toolStripSeparator16,
             this.exportToolStripMenuItem,
+            this.exportPreviewVideoToolStripMenuItem,
             this.toolStripSeparator1,
             this.toolStripMenuItem_Close});
 			this.sequenceToolStripMenuItem.Name = "sequenceToolStripMenuItem";
@@ -534,6 +536,13 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			this.exportToolStripMenuItem.Size = new System.Drawing.Size(186, 22);
 			this.exportToolStripMenuItem.Text = "Export";
 			this.exportToolStripMenuItem.Click += new System.EventHandler(this.exportToolStripMenuItem_Click);
+			//
+			// exportPreviewVideoToolStripMenuItem
+			//
+			this.exportPreviewVideoToolStripMenuItem.Name = "exportPreviewVideoToolStripMenuItem";
+			this.exportPreviewVideoToolStripMenuItem.Size = new System.Drawing.Size(186, 22);
+			this.exportPreviewVideoToolStripMenuItem.Text = "Export Preview Video...";
+			this.exportPreviewVideoToolStripMenuItem.Click += new System.EventHandler(this.exportPreviewVideoToolStripMenuItem_Click);
 			// 
 			// toolStripSeparator1
 			// 
@@ -2383,6 +2392,7 @@ namespace VixenModules.Editor.TimedSequenceEditor
 		private System.Windows.Forms.ToolStripMenuItem changeMapToolStripMenuItem;
 		private System.Windows.Forms.ToolStripSeparator toolStripSeparator15;
 		private System.Windows.Forms.ToolStripMenuItem exportToolStripMenuItem;
+		private System.Windows.Forms.ToolStripMenuItem exportPreviewVideoToolStripMenuItem;
 		private System.Windows.Forms.ToolStripSeparator toolStripSeparator16;
 		private System.Windows.Forms.ToolStripMenuItem toolStripMenuItem_ResizeIndicator;
 		private System.Windows.Forms.ToolStripMenuItem toolStripMenuItem_RIColor_Blue;
