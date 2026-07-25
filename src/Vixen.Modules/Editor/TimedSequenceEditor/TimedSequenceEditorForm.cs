@@ -167,6 +167,7 @@ namespace VixenModules.Editor.TimedSequenceEditor
 		public TimedSequenceEditorForm()
 		{
 			InitializeComponent();
+			InitializeTimecodeChaseUi();
 			_scaleFactor = ScalingTools.GetScaleFactor();
 			menuStrip.Renderer = new ThemeToolStripRenderer();
 			
@@ -3107,7 +3108,16 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			}
 			//_context = (ProgramContext)VixenSystem.Contexts.CreateContext(Sequence);
 			//_context = VixenSystem.Contexts.CreateSequenceContext(new ContextFeatures(ContextCaching.ContextLevelCaching), Sequence);
-			_context = VixenSystem.Contexts.CreateSequenceContext(new ContextFeatures(ContextCaching.NoCaching), Sequence);
+			if (_chaseArmed && _chaseTiming != null)
+			{
+				// Armed timecode chase: run this sequence against the external MTC clock.
+				_chaseExecutor = new Timecode.TimecodeChaseExecutor(_chaseTiming);
+				_context = VixenSystem.Contexts.CreateSequenceContext(new ContextFeatures(ContextCaching.NoCaching), Sequence, _chaseExecutor);
+			}
+			else
+			{
+				_context = VixenSystem.Contexts.CreateSequenceContext(new ContextFeatures(ContextCaching.NoCaching), Sequence);
+			}
 			if (_context == null)
 			{
 				Logging.Error(@"TimedSequenceEditor: <OpenSequenceContext> - null _context when attempting to play sequence!");
@@ -3139,6 +3149,7 @@ namespace VixenModules.Editor.TimedSequenceEditor
 
 		private void PlayPauseToggle()
 		{
+			if (_chaseArmed) return; // playback is driven by incoming timecode while chase is armed
 			if (!_context.IsRunning || _context.IsPaused)
 			{
 				PlaySequence();
