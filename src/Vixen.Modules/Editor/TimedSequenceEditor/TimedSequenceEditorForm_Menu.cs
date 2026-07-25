@@ -8,7 +8,7 @@ using Vixen.Module.Effect;
 using Vixen.Module.Media;
 using Vixen.Services;
 using Vixen.Sys;
-using VixenModules.Analysis.BeatsAndBars;
+// using VixenModules.Analysis.BeatsAndBars; // Removed for build without C++ deps
 using VixenModules.App.ColorGradients;
 using VixenModules.Property.Face;
 using VixenModules.Sequence.Timed;
@@ -132,6 +132,14 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			EffectEditorForm.PreviewStop();
 			ExportDialog ed = new ExportDialog(Sequence);
 			ed.ShowDialog();
+			EffectEditorForm.ResumePreview();
+		}
+
+		private void exportPreviewVideoToolStripMenuItem_Click(object sender, EventArgs e)
+		{
+			EffectEditorForm.PreviewStop();
+			var dialog = new VideoExport.VideoExportDialog(Sequence);
+			dialog.ShowDialog(this);
 			EffectEditorForm.ResumePreview();
 		}
 
@@ -612,10 +620,10 @@ namespace VixenModules.Editor.TimedSequenceEditor
 			{
 				if (module is Audio)
 				{
-					BeatsAndBars audioFeatures = new BeatsAndBars((Audio)module);
-					 
-					audioFeatures.DoBeatBarDetection(_sequence.LabeledMarkCollections);
-					SequenceModified();
+					// BeatsAndBars disabled for build without C++ deps
+					// BeatsAndBars audioFeatures = new BeatsAndBars((Audio)module);
+					// audioFeatures.DoBeatBarDetection(_sequence.LabeledMarkCollections);
+					// SequenceModified();
 					break;
 
 				}
