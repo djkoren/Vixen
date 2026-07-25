@@ -13,6 +13,12 @@ namespace VixenModules.App.ColorGradients
 		private bool _discreteColors;
 		private IEnumerable<Color> _validDiscreteColors;
 
+		/// <summary>
+		/// Optional mark positions within the effect, expressed as positions (0-100).
+		/// Each entry includes position and display color.
+		/// </summary>
+		public List<(double Position, Color Color)> MarkPositions { get; set; }
+
 		public ColorGradientEditor(ColorGradient gradient, bool discreteColors, IEnumerable<Color> validDiscreteColors)
 		{
 			InitializeComponent();
@@ -23,6 +29,9 @@ namespace VixenModules.App.ColorGradients
 			_discreteColors = discreteColors;
 			_validDiscreteColors = validDiscreteColors;
 			PopulateFormWithGradient(_gradient);
+
+			// Draw marks on the gradient when the dialog is shown
+			this.Shown += (s, ev) => AddMarksOverlay();
 		}
 
 		private ColorGradient _gradient;
@@ -199,11 +208,35 @@ namespace VixenModules.App.ColorGradients
 		}
 
 		#region Draw lines and GroupBox borders
-		
+
 		private void groupBoxes_Paint(object sender, PaintEventArgs e)
 		{
 			ThemeGroupBoxRenderer.GroupBoxesDrawBorder(sender, e, Font);
 		}
+		#endregion
+
+		#region Marks Overlay
+
+		/// <summary>
+		/// Sets mark positions directly on the GradientEdit control so marks
+		/// render on top of the gradient and color stops.
+		/// </summary>
+		private void AddMarksOverlay()
+		{
+			if (MarkPositions == null || MarkPositions.Count == 0) return;
+
+			// Access the GradientEdit control inside the GradientEditPanel
+			foreach (Control c in gradientEditPanel.Controls)
+			{
+				if (c is GradientEdit edit)
+				{
+					edit.MarkPositions = MarkPositions;
+					edit.Invalidate();
+					break;
+				}
+			}
+		}
+
 		#endregion
 	}
 }
