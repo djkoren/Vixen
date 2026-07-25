@@ -33,12 +33,21 @@ namespace VixenModules.Effect.Marquee
 		private const double MaxSpeedLedsPerSecond = 120.0;
 
 		/// <summary>
-		/// Fraction of the gap a group can be shifted by at maximum randomness. Half a gap is the point
-		/// at which two groups leaning towards each other exactly meet, so staying at or below it means
-		/// the randomizer can never merge two groups or hide one behind another - every group keeps its
-		/// full width and only the spacing between them varies.
+		/// Safety margin on the gap-closing budget, so rounding can never quite eat the last dark bank.
 		/// </summary>
-		private const double MaxJitterGapFraction = 0.5;
+		private const double GapClosureMargin = 0.95;
+
+		/// <summary>
+		/// Hard ceiling on any single group's displacement, as a fraction of the gap. Keeping every group
+		/// inside its own dark space is what lets the group search only look one cell either side.
+		/// </summary>
+		private const double MaxOffsetGapFraction = 0.5;
+
+		/// <summary>Slowest crawl in wave cycles per second.</summary>
+		private const double MinCrawlHz = 0.05;
+
+		/// <summary>Fastest crawl in wave cycles per second.</summary>
+		private const double MaxCrawlHz = 4.0;
 
 		#endregion
 
@@ -81,6 +90,22 @@ namespace VixenModules.Effect.Marquee
 
 		/// <summary>Maximum per group timing offset in LED units (0 when Randomness is off).</summary>
 		private double _jitterAmount;
+
+		/// <summary>Peak crawl displacement in LED units (0 when Crawl is off).</summary>
+		private double _crawlAmount;
+
+		/// <summary>Crawl rate in wave cycles per second.</summary>
+		private double _crawlHz;
+
+		/// <summary>How many groups one crawl wave spans.</summary>
+		private double _crawlWaveGroups;
+
+		/// <summary>
+		/// How far the crawl wave has advanced, in cycles, at the frame being rendered. Driven by
+		/// elapsed time rather than by <see cref="_phase"/>, so the crawl runs at its own rate and keeps
+		/// rippling even when the pattern is not moving.
+		/// </summary>
+		private double _crawlPhase;
 
 		private bool _moveAlongX;
 		private double _dirSign;
@@ -284,6 +309,72 @@ namespace VixenModules.Effect.Marquee
 			}
 		}
 
+		/// <summary>
+		/// Gets or sets the strength of the crawl, 0 to 100. Groups surge forward and back in sequence,
+		/// each lagging the one before it, so the surge travels along the pattern.
+		/// </summary>
+		[Value]
+		[ProviderCategory(@"Config", 1)]
+		[ProviderDisplayName(@"Crawl")]
+		[ProviderDescription(@"Groups surge in sequence, like a centipede.  Needs a gap to move in.")]
+		[PropertyEditor("SliderEditor")]
+		[NumberRange(0, 100, 1)]
+		[PropertyOrder(7)]
+		public int Crawl
+		{
+			get { return _data.Crawl; }
+			set
+			{
+				_data.Crawl = value;
+				UpdateCrawlAttributes();
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
+		/// <summary>
+		/// Gets or sets how fast the crawl surge travels, 0 to 100. Independent of <see cref="SpeedCurve"/>,
+		/// so the pattern can crawl while standing still.
+		/// </summary>
+		[Value]
+		[ProviderCategory(@"Config", 1)]
+		[ProviderDisplayName(@"Crawl Speed")]
+		[ProviderDescription(@"How fast the surge travels.")]
+		[PropertyEditor("SliderEditor")]
+		[NumberRange(0, 100, 1)]
+		[PropertyOrder(8)]
+		public int CrawlSpeed
+		{
+			get { return _data.CrawlSpeed; }
+			set
+			{
+				_data.CrawlSpeed = value;
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
+		/// <summary>
+		/// Gets or sets how many groups one crawl surge spans. Low values scuttle, high values give a long
+		/// slow body wave. Minimum 2.
+		/// </summary>
+		[Value]
+		[ProviderCategory(@"Config", 1)]
+		[ProviderDisplayName(@"Wave Length")]
+		[ProviderDescription(@"How many groups one surge spans.")]
+		[PropertyOrder(9)]
+		public int CrawlWaveLength
+		{
+			get { return _data.CrawlWaveLength; }
+			set
+			{
+				if (value < 2) value = 2;
+				_data.CrawlWaveLength = value;
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
 		#endregion
 
 		#region Color properties
@@ -426,11 +517,46 @@ namespace VixenModules.Effect.Marquee
 
 			_period = _periodBanks * _fadeGroup;
 
-			// Largest amount a single group can be shifted early or late by the randomizer.  It is scaled
-			// by the gap rather than the whole period so groups shuffle within the dark space between them
-			// instead of running into each other.  With no gap at all there is nowhere to move.
+			_crawlWaveGroups = Math.Max(2, CrawlWaveLength);
+			_crawlHz = CrawlSpeed <= 0
+				? 0.0
+				: MinCrawlHz * Math.Pow(MaxCrawlHz / MinCrawlHz, Math.Min(100, CrawlSpeed) / 100.0);
+
+			// Randomness and crawl both displace groups, and between them they must not close the gap, or
+			// two groups run together and the lit count stops matching Lights On.  They share one closure
+			// budget, split in proportion to the two sliders so that either alone gets the full range.
+			//
+			// The budget is what is left of the gap once one bank is set aside.  Not overlapping is not
+			// enough: LEDs are discrete, so if the dark space between two groups shrinks below one bank no
+			// LED lands in it and they read as a single run even though the maths never overlapped them.
+			// Keeping a bank in reserve guarantees a dark LED always survives between groups.
+			//
+			// The budget is spent per unit of amplitude at a different rate for each, because what costs
+			// gap is how far a group moves *relative to its neighbour*.  Two random neighbours can sit at
+			// opposite extremes, so a unit of amplitude costs two units of gap.  Crawl neighbours are one
+			// step apart on the wave, so they cost 2*sin(pi/WaveLength) -- a short wave puts neighbours in
+			// opposition and is expensive, a long wave moves them almost together and is nearly free.
+			// That is why a long wave is allowed a much bigger swing before the absolute cap takes over.
 			double gap = Math.Max(0.0, _period - _litWidth);
-			_jitterAmount = Randomness <= 0 ? 0.0 : (Randomness / 100.0) * gap * MaxJitterGapFraction;
+			double closureBudget = Math.Max(0.0, gap - _fadeGroup) * GapClosureMargin;
+			double offsetCap = gap * MaxOffsetGapFraction;
+
+			double randomWeight = Math.Max(0, Randomness) / 100.0;
+			double crawlWeight = Math.Max(0, Crawl) / 100.0;
+			double totalWeight = randomWeight + crawlWeight;
+			if (totalWeight > 1.0)
+			{
+				randomWeight /= totalWeight;
+				crawlWeight /= totalWeight;
+			}
+
+			const double randomGapCost = 2.0;
+			double crawlGapCost = 2.0 * Math.Sin(Math.PI / _crawlWaveGroups);
+
+			_jitterAmount = Math.Min(randomWeight * closureBudget / randomGapCost, randomWeight * offsetCap);
+			_crawlAmount = crawlGapCost <= 0.0
+				? 0.0
+				: Math.Min(crawlWeight * closureBudget / crawlGapCost, crawlWeight * offsetCap);
 
 			// Pre-sample the fade curve into a lookup table.
 			_lutSize = 257;
@@ -538,11 +664,15 @@ namespace VixenModules.Effect.Marquee
 		#region Private Methods
 
 		/// <summary>
-		/// Advances the continuous scroll position for the specified frame based on the speed curve.
+		/// Advances the continuous scroll position and the crawl wave for the specified frame.
 		/// </summary>
 		/// <param name="frame">Current frame number</param>
 		private void UpdatePhase(int frame)
 		{
+			// The crawl runs at a constant rate, so it is computed straight from the frame number rather
+			// than accumulated -- no drift, and it needs no reset between target nodes.
+			_crawlPhase = frame * (FrameTime / 1000.0) * _crawlHz;
+
 			if (frame == 0)
 			{
 				// Restart at the beginning of the pattern.  RenderEffect is called for frame 0 first for every
@@ -594,6 +724,30 @@ namespace VixenModules.Effect.Marquee
 		}
 
 		/// <summary>
+		/// Crawl displacement for a whole lit group, in LED units.
+		/// </summary>
+		/// <remarks>
+		/// Each group lags the one before it by a fixed slice of the cycle, so instead of every group
+		/// swinging together the surge travels along the chain - a metachronal wave, which is what a
+		/// centipede's legs do and what makes the pattern read as walking rather than sliding. The wave
+		/// runs backwards along the chain relative to travel, matching the retrograde gait real
+		/// centipedes use. Unlike the randomizer this is a function of time as well as of the group, so
+		/// it keeps moving even when the pattern itself is stationary.
+		/// </remarks>
+		/// <param name="group">Index of the group within the scrolling pattern</param>
+		/// <returns>Displacement in LED units</returns>
+		private double GroupCrawl(long group)
+		{
+			if (_crawlAmount <= 0.0)
+			{
+				return 0.0;
+			}
+
+			double cycles = _crawlPhase - group / _crawlWaveGroups;
+			return Math.Sin(cycles * 2.0 * Math.PI) * _crawlAmount;
+		}
+
+		/// <summary>
 		/// Leading edge of a lit group in pattern space.
 		/// </summary>
 		/// <remarks>
@@ -604,8 +758,8 @@ namespace VixenModules.Effect.Marquee
 		/// makes the spacing alternate between the floor and the ceiling of the pitch when
 		/// <see cref="FitToElement"/> makes that fractional, which is the closest an evenly spaced pattern
 		/// can get on a discrete strip, and it still lands the last group on the end of the element.
-		/// Randomness is added afterwards and is deliberately not snapped - that per group offset is the
-		/// whole point of it.
+		/// Randomness and crawl are added afterwards and are deliberately not snapped - putting groups out
+		/// of step with each other is the whole point of them.
 		/// </remarks>
 		/// <param name="group">Index of the group within the scrolling pattern</param>
 		/// <returns>Position of the group's leading edge in pattern space</returns>
@@ -613,7 +767,7 @@ namespace VixenModules.Effect.Marquee
 		{
 			// Floor(x + 0.5) rather than Math.Round: banker's rounding would pull every other exact half
 			// the wrong way and make the spacing lumpy.
-			return Math.Floor(group * _periodBanks + 0.5) * _fadeGroup + GroupJitter(group);
+			return Math.Floor(group * _periodBanks + 0.5) * _fadeGroup + GroupJitter(group) + GroupCrawl(group);
 		}
 
 		/// <summary>
@@ -623,10 +777,10 @@ namespace VixenModules.Effect.Marquee
 		/// A bank is in or out as a unit, decided on its centre. Because group starts sit on bank boundaries
 		/// and a group is a whole number of banks wide, exactly <see cref="_onBanks"/> banks are lit at every
 		/// instant: the lit count never flickers, and a group is never drawn wider than it was asked to be.
-		/// Both the start snapping and the randomizer can move a group off the cell the evenly spaced maths
-		/// would put it in, so the neighbours either side are tested too; both displacements are well under
-		/// half a period, so one group either way is always enough. Where two groups could claim the bank the
-		/// one holding it further from its own edge wins.
+		/// The start snapping, the randomizer and the crawl can each move a group off the cell the evenly
+		/// spaced maths would put it in, so the neighbours either side are tested too; the displacements
+		/// together are capped at half a gap, well under half a period, so one group either way is always
+		/// enough. Where two groups could claim the bank the one holding it further from its own edge wins.
 		/// </remarks>
 		/// <param name="centre">Centre of the bank in pattern space (movement already applied)</param>
 		/// <param name="group">Index of the group owning the bank; undefined when the method returns false</param>
@@ -806,7 +960,27 @@ namespace VixenModules.Effect.Marquee
 		private void InitAllAttributes()
 		{
 			UpdateStringOrientationAttributes(true);
+			UpdateCrawlAttributes(false);
 			TypeDescriptor.Refresh(this);
+		}
+
+		/// <summary>
+		/// Updates the visibility of the crawl attributes. The speed and wave length only mean anything
+		/// once the crawl is turned up, so they stay out of the way until then.
+		/// </summary>
+		/// <param name="refresh">True to refresh the type descriptor after updating visibility</param>
+		private void UpdateCrawlAttributes(bool refresh = true)
+		{
+			Dictionary<string, bool> propertyStates = new Dictionary<string, bool>(2)
+			{
+				{ nameof(CrawlSpeed), Crawl > 0 },
+				{ nameof(CrawlWaveLength), Crawl > 0 },
+			};
+			SetBrowsable(propertyStates);
+			if (refresh)
+			{
+				TypeDescriptor.Refresh(this);
+			}
 		}
 
 		#endregion
