@@ -29,12 +29,16 @@ namespace VixenModules.App.Curves
 		/// The array spans the effect's full duration, mapped to X range 0-100.
 		/// Null means no audio available.
 		/// </summary>
+		[Browsable(false)]
+		[DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
 		public float[] WaveformPeaks { get; set; }
 
 		/// <summary>
 		/// Optional mark positions within the effect, expressed as X positions (0-100).
 		/// Each entry includes position and display color.
 		/// </summary>
+		[Browsable(false)]
+		[DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
 		public List<(double Position, Color Color)> MarkPositions { get; set; }
 
 		public CurveEditor()
