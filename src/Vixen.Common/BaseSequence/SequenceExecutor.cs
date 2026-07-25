@@ -189,7 +189,7 @@ namespace BaseSequence
 				_syncContext.Post(x => _Stop(), null);
 			}
 
-			TimingSource = Sequence.GetTiming() ?? _GetDefaultTimingSource();
+			TimingSource = _ResolveTimingSource();
 
 			_LoadMedia();
 
@@ -201,10 +201,7 @@ namespace BaseSequence
 			// Start the crazy train.
 			IsRunning = true;
 
-			while (TimingSource.Position == StartTime)
-			{
-				Thread.Sleep(1); //Give the train a chance to get out of the station.
-			}
+			_WaitForTimingSourceToStart();
 
 			_endCheckTimer.Start();
 
@@ -223,10 +220,7 @@ namespace BaseSequence
 			TimingSource.Start();
 			OnSequenceReStarted(new SequenceStartedEventArgs(Sequence, TimingSource, StartTime, EndTime));
 			
-			while (TimingSource.Position == StartTime)
-			{
-				Thread.Sleep(1); //Give the train a chance to get out of the station.
-			}
+			_WaitForTimingSourceToStart();
 
 			_endCheckTimer.Start();
 		}
@@ -249,6 +243,23 @@ namespace BaseSequence
 		protected virtual TimeSpan _CoerceEndTime(TimeSpan endTime)
 		{
 			return endTime < Sequence.Length ? endTime : Sequence.Length;
+		}
+
+		protected virtual ITiming _ResolveTimingSource()
+		{
+			return Sequence.GetTiming() ?? _GetDefaultTimingSource();
+		}
+
+		// Extracted so an externally-clocked executor (e.g. timecode chase) can skip the
+		// spin-wait: an external clock only advances when its master advances, so blocking
+		// the calling (UI) thread here would hang. Base behavior is unchanged.
+		protected virtual void _WaitForTimingSourceToStart()
+		{
+			// Give the train a chance to get out of the station.
+			while (TimingSource.Position == StartTime)
+			{
+				Thread.Sleep(1);
+			}
 		}
 
 		protected virtual ITiming _GetDefaultTimingSource()
@@ -394,7 +405,7 @@ namespace BaseSequence
 			return isEnd;
 		}
 
-		private bool _IsEndOfSequence()
+		protected virtual bool _IsEndOfSequence()
 		{
 			TimeSpan position = TimingSource.Position;
 			return _IsTimedSequence && (position >= EndTime || position == TimeSpan.Zero);

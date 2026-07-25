@@ -88,6 +88,24 @@ namespace Vixen.Sys.Managers
 			return context;
 		}
 
+		// Overload that injects a pre-built executor (mirrors CreateProgramContext's executor
+		// overload). Used by the timecode-chase transport to run a sequence against an
+		// externally-clocked executor without touching SequenceTypeService / normal playback.
+		public ISequenceContext CreateSequenceContext(ContextFeatures contextFeatures, ISequence sequence, ISequenceExecutor executor)
+		{
+			if (contextFeatures == null) throw new ArgumentNullException("contextFeatures");
+			if (executor == null) throw new ArgumentNullException("executor");
+
+			ISequenceContext context = (ISequenceContext) _CreateContext(ContextTargetType.Sequence, contextFeatures);
+			if (context != null) {
+				context.Executor = executor;
+				context.Sequence = sequence;
+				_AddContext(context);
+			}
+			VixenSystem.Instrumentation.AddValue(_contextUpdateTimeValue);
+			return context;
+		}
+
 		public void ReleaseContext(IContext context)
 		{
 			if (context == null) return;
