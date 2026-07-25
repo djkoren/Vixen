@@ -158,7 +158,7 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Config", 1)]
 		[ProviderDisplayName(@"Direction")]
-		[ProviderDescription(@"Direction")]
+		[ProviderDescription(@"Which way the pattern travels.")]
 		[PropertyOrder(0)]
 		public MarqueeDirection Direction
 		{
@@ -196,7 +196,7 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Config", 1)]
 		[ProviderDisplayName(@"Lights Off")]
-		[ProviderDescription(@"Number of dark LEDs in the gap between each lit group.")]
+		[ProviderDescription(@"Number of dark LEDs between lit groups.")]
 		[PropertyOrder(2)]
 		public int OffCount
 		{
@@ -217,7 +217,7 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Config", 1)]
 		[ProviderDisplayName(@"Fit To Element")]
-		[ProviderDescription(@"Widens the gap so that a whole number of on/off groups fits exactly across the element.  The groups and gaps are then spaced evenly end to end and the pattern wraps seamlessly around the element.  Lights Off becomes the minimum gap - the gap is only ever padded, never reduced.")]
+		[ProviderDescription(@"Space the groups evenly across the element.  Lights Off is the minimum gap.")]
 		[PropertyOrder(3)]
 		public bool FitToElement
 		{
@@ -233,7 +233,7 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Config", 1)]
 		[ProviderDisplayName(@"Advance By")]
-		[ProviderDescription(@"How many LEDs the pattern moves at a time, and so how many light and go out together.  The element is divided into fixed steps of this many LEDs; every LED in a step always shows the same brightness and the whole step switches as one, so 2 moves and lights two at a time and 5 does five at a time.  1 = the pattern slides one LED at a time (classic marquee).  Above 1, Lights On and Lights Off are rounded to a whole number of steps so every group stays in step with the others.  Cannot exceed Lights On and snaps down automatically.")]
+		[ProviderDescription(@"How many LEDs the pattern moves by.  They light and fade together.")]
 		[PropertyOrder(4)]
 		public int FadeGroup
 		{
@@ -253,7 +253,7 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Config", 1)]
 		[ProviderDisplayName(@"Speed")]
-		[ProviderDescription(@"Movement speed over the duration of the effect.  The low end of the curve is a very slow creep and the high end is fast; most of the range is devoted to slow motion.")]
+		[ProviderDescription(@"Movement speed over the effect.  Most of the range is slow, fine control.")]
 		[PropertyOrder(5)]
 		public Curve SpeedCurve
 		{
@@ -269,7 +269,7 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Config", 1)]
 		[ProviderDisplayName(@"Randomness")]
-		[ProviderDescription(@"Shifts each lit group as a whole, early or late, by a random amount.  The LEDs within a group always stay together - individual LEDs only move independently when Lights On is 1, where each group is a single LED.  Groups only shuffle within the gap between them, so they never merge or overlap; with Lights Off at 0 there is no gap to move in and this has no effect.  Off is a perfectly synced marquee.")]
+		[ProviderDescription(@"Shifts each lit group early or late.  Needs a gap to move in.")]
 		[PropertyEditor("SliderEditor")]
 		[NumberRange(0, 100, 1)]
 		[PropertyOrder(6)]
@@ -291,7 +291,7 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Color", 2)]
 		[ProviderDisplayName(@"Color Mode")]
-		[ProviderDescription(@"How the color list is laid out across the marquee: a solid color per group, a gradient across each group, or one gradient stretched along the whole prop.")]
+		[ProviderDescription(@"How the colors are laid out across the marquee.")]
 		[PropertyOrder(0)]
 		public MarqueeColorMode ColorMode
 		{
@@ -307,7 +307,7 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Color", 2)]
 		[ProviderDisplayName(@"ColorGradients")]
-		[ProviderDescription(@"Color")]
+		[ProviderDescription(@"The color palette.  Groups cycle through it.")]
 		[PropertyOrder(1)]
 		public List<ColorGradient> Colors
 		{
@@ -327,7 +327,7 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Brightness", 3)]
 		[ProviderDisplayName(@"Fade")]
-		[ProviderDescription(@"Brightness of an LED across its journey through a lit group, read left to right: the left of the curve is the moment it lights and the right is the moment before it goes dark.  Nothing else is applied on top, so the curve alone decides the shape - a rising line ramps up and snaps off, a falling line snaps on and ramps down, a curve peaking in the middle fades up and back down, and a flat line gives hard bulbs with no fade.  It applies to a whole step of LEDs at once, never across the LEDs within one.")]
+		[ProviderDescription(@"Brightness of an LED from the moment it lights to the moment it goes dark.  Flat = no fade.")]
 		[PropertyOrder(0)]
 		public Curve FadeCurve
 		{
@@ -343,7 +343,7 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Brightness", 3)]
 		[ProviderDisplayName(@"Brightness")]
-		[ProviderDescription(@"Overall brightness of the effect over its duration.")]
+		[ProviderDescription(@"Overall brightness over the effect.")]
 		[PropertyOrder(1)]
 		public Curve LevelCurve
 		{
