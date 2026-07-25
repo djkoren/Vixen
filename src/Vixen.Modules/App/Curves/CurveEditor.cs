@@ -19,6 +19,24 @@ namespace VixenModules.App.Curves
 		private System.Windows.Forms.Timer _startupMouseInputTimer;
 		private static readonly Logger Logging = LogManager.GetCurrentClassLogger();
 
+		// Bezier handle dragging state
+		private bool _isDraggingHandle;
+		private int _dragHandlePointIndex = -1;
+		private bool _dragHandleIsIn; // true = in-handle, false = out-handle
+
+		/// <summary>
+		/// Optional waveform peak data. Each element is a peak amplitude [0..1].
+		/// The array spans the effect's full duration, mapped to X range 0-100.
+		/// Null means no audio available.
+		/// </summary>
+		public float[] WaveformPeaks { get; set; }
+
+		/// <summary>
+		/// Optional mark positions within the effect, expressed as X positions (0-100).
+		/// Each entry includes position and display color.
+		/// </summary>
+		public List<(double Position, Color Color)> MarkPositions { get; set; }
+
 		public CurveEditor()
 		{
 			InitializeComponent();
@@ -53,6 +71,12 @@ namespace VixenModules.App.Curves
 			zedGraphControl.GraphPane.Border = new Border(ThemeColorTable.BackgroundColor, 0);
 
 			zedGraphControl.GraphPane.AxisChange();
+
+			// Add waveform/marks when the dialog is shown (after properties are set by caller)
+			this.Shown += (s, ev) => AddWaveformAndMarksToGraph();
+
+			// Subscribe to direct MouseClick for Bezier toggle (more reliable than ZedGraph events)
+			zedGraphControl.MouseClick += zedGraphControl_BezierMouseClick;
 		}
 
 		public CurveEditor(Curve curve)
@@ -123,6 +147,42 @@ namespace VixenModules.App.Curves
 			if (_suppressStartupMouseInput)
 			{
 				return true;
+			}
+
+			// Handle Bezier handle grip dragging
+			if (_isDraggingHandle && e.Button == MouseButtons.Left)
+			{
+				double handleX, handleY;
+				zedGraphControl.GraphPane.ReverseTransform(e.Location, out handleX, out handleY);
+
+				handleX = Math.Max(0, Math.Min(100, handleX));
+				handleY = Math.Max(0, Math.Min(100, handleY));
+
+				PointPairList pointList = zedGraphControl.GraphPane.CurveList[0].Points as PointPairList;
+				if (pointList != null && _dragHandlePointIndex >= 0 && _dragHandlePointIndex < pointList.Count)
+				{
+					var point = pointList[_dragHandlePointIndex];
+					var handleData = point.Tag as BezierHandleData;
+					if (handleData != null)
+					{
+						if (_dragHandleIsIn)
+						{
+							handleData.InHandleX = handleX - point.X;
+							handleData.InHandleY = handleY - point.Y;
+							// Enforce: in-handle must point left (X offset <= 0)
+							if (handleData.InHandleX > 0) handleData.InHandleX = 0;
+						}
+						else
+						{
+							handleData.OutHandleX = handleX - point.X;
+							handleData.OutHandleY = handleY - point.Y;
+							// Enforce: out-handle must point right (X offset >= 0)
+							if (handleData.OutHandleX < 0) handleData.OutHandleX = 0;
+						}
+						UpdateHandleGraphObjects();
+					}
+				}
+				return true; // consume the event
 			}
 
 			double newX, newY;
@@ -266,7 +326,14 @@ namespace VixenModules.App.Curves
 				txtYValue.Text = sender.DragEditingPair.Y.ToString("0.####");
 				txtXValue.Enabled = txtYValue.Enabled = btnUpdateCoordinates.Enabled = true;
 			}
-			// actually does nothing, just haven't changed the event handler definition
+
+			// Update Bezier handle visuals when points are dragged
+			PointPairList pointList = zedGraphControl.GraphPane.CurveList[0].Points as PointPairList;
+			if (pointList != null && pointList.HasBezierData())
+			{
+				UpdateHandleGraphObjects();
+			}
+
 			return true;
 		}
 
@@ -282,6 +349,23 @@ namespace VixenModules.App.Curves
 
 			CurveItem curve;
 			int dragPointIndex;
+
+			// Bezier handle toggle is handled in zedGraphControl_BezierMouseClick (MouseClick event)
+			// to avoid double-firing with MouseDown
+
+			// Handle grip hit-test: check if clicking near a Bezier handle grip
+			if (e.Button == MouseButtons.Left && Control.ModifierKeys == Keys.None)
+			{
+				int handlePointIdx;
+				bool isInHandle;
+				if (FindNearestHandle(e.Location, out handlePointIdx, out isInHandle))
+				{
+					_isDraggingHandle = true;
+					_dragHandlePointIndex = handlePointIdx;
+					_dragHandleIsIn = isInHandle;
+					return true; // consume event to prevent ZedGraph point drag
+				}
+			}
 
 			// if CTRL is pressed, and we're not near a specific point, add a new point
 
@@ -343,6 +427,14 @@ namespace VixenModules.App.Curves
 			if (_suppressStartupMouseInput)
 			{
 				return true;
+			}
+
+			if (_isDraggingHandle)
+			{
+				_isDraggingHandle = false;
+				_dragHandlePointIndex = -1;
+				UpdateHandleGraphObjects();
+				return false;
 			}
 
 			if (_drawCurve)
@@ -441,6 +533,12 @@ namespace VixenModules.App.Curves
 				Text = "Curve Editor";
 			}
 
+			// Add waveform and marks background
+			AddWaveformAndMarksToGraph();
+
+			// Restore Bezier handle visuals if the curve has handle data
+			UpdateHandleGraphObjects();
+
 			zedGraphControl.Invalidate();
 		}
 
@@ -523,19 +621,48 @@ namespace VixenModules.App.Curves
 
 			foreach (var curveItem in zedGraphControl.GraphPane.CurveList)
 			{
+				// Step 1: Reverse X coordinates
 				for (int i = 0; i < curveItem.Points.Count; i++)
 				{
 					curveItem.Points[i].X = 100 - curveItem.Points[i].X;
 				}
+
 				var points = curveItem.Points as PointPairList;
 				if (points != null)
 				{
+					// Force re-sort since we modified X values directly
+					// (Sort() skips if it thinks the list is already sorted)
+					points.SetSorted(false);
 					points.Sort();
+				}
+
+				// Step 2: After sort, swap in/out handles completely
+				// (negate X for horizontal flip, swap Y between in/out)
+				for (int i = 0; i < curveItem.Points.Count; i++)
+				{
+					var h = curveItem.Points[i].Tag as BezierHandleData;
+					if (h == null) continue;
+
+					// Save complete old in-handle
+					double oldInX = h.InHandleX, oldInY = h.InHandleY;
+					bool oldHasIn = h.HasInHandle;
+
+					// New in = negated old out (full swap)
+					h.InHandleX = -h.OutHandleX;
+					h.InHandleY = h.OutHandleY;
+					h.HasInHandle = h.HasOutHandle;
+
+					// New out = negated old in (full swap)
+					h.OutHandleX = -oldInX;
+					h.OutHandleY = oldInY;
+					h.HasOutHandle = oldHasIn;
 				}
 
 			}
 
-			zedGraphControl.Invalidate();
+			UpdateHandleGraphObjects();
+			zedGraphControl.GraphPane.AxisChange();
+			zedGraphControl.Refresh();
 		}
 
 		private void btnInvert_Click(object sender, EventArgs e)
@@ -545,9 +672,18 @@ namespace VixenModules.App.Curves
 				for (int i = 0; i < curveItem.Points.Count; i++)
 				{
 					curveItem.Points[i].Y = 100 - curveItem.Points[i].Y;
+
+					// Invert Bezier handles: negate Y offsets
+					var handleData = curveItem.Points[i].Tag as BezierHandleData;
+					if (handleData != null)
+					{
+						handleData.InHandleY = -handleData.InHandleY;
+						handleData.OutHandleY = -handleData.OutHandleY;
+					}
 				}
-				
+
 			}
+			UpdateHandleGraphObjects();
 			zedGraphControl.Invalidate();
 		}
 
@@ -686,5 +822,328 @@ namespace VixenModules.App.Curves
 				_startupMouseInputTimer = null;
 			}
 		}
+		#region Waveform and Marks Rendering
+
+		/// <summary>
+		/// Adds waveform and marks to the ZedGraph GraphObjList so they render
+		/// as part of ZedGraph's native drawing pipeline.
+		/// Call after PopulateFormWithCurve or when waveform data changes.
+		/// </summary>
+		private void AddWaveformAndMarksToGraph()
+		{
+			var pane = zedGraphControl.GraphPane;
+
+			// Remove old waveform/marks objects
+			for (int i = pane.GraphObjList.Count - 1; i >= 0; i--)
+			{
+				if (pane.GraphObjList[i].Tag is string tag &&
+				    (tag == "waveform_overlay" || tag == "mark_line"))
+					pane.GraphObjList.RemoveAt(i);
+			}
+
+			// Add waveform as a bitmap ImageObj
+			if (WaveformPeaks != null && WaveformPeaks.Length > 0)
+			{
+				var waveformImage = RenderWaveformBitmap(WaveformPeaks, 800, 200);
+				if (waveformImage != null)
+				{
+					// Position at (0, 100) spanning full chart (width=100, height=100 in curve space)
+					var imgObj = new ImageObj(waveformImage, 0, 100, 100, 100);
+					imgObj.Location.CoordinateFrame = CoordType.AxisXYScale;
+					imgObj.IsScaled = true;
+					imgObj.ZOrder = ZOrder.F_BehindGrid;
+					imgObj.Tag = "waveform_overlay";
+					pane.GraphObjList.Add(imgObj);
+				}
+			}
+
+			// Add marks as vertical lines
+			if (MarkPositions != null && MarkPositions.Count > 0)
+			{
+				foreach (var (position, color) in MarkPositions)
+				{
+					var line = new LineObj(Color.FromArgb(80, color), position, 100, position, 0);
+					line.Line.Width = 1f;
+					line.Line.Style = System.Drawing.Drawing2D.DashStyle.Dash;
+					line.Location.CoordinateFrame = CoordType.AxisXYScale;
+					line.IsClippedToChartRect = true;
+					line.ZOrder = ZOrder.E_BehindCurves;
+					line.Tag = "mark_line";
+					pane.GraphObjList.Add(line);
+				}
+			}
+
+			zedGraphControl.Invalidate();
+		}
+
+		/// <summary>
+		/// Renders the waveform peaks into a bitmap with transparent background.
+		/// </summary>
+		private Bitmap RenderWaveformBitmap(float[] peaks, int width, int height)
+		{
+			var bmp = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+
+			using (var g = Graphics.FromImage(bmp))
+			{
+				g.Clear(Color.Transparent);
+
+				// Draw half-waveform from the bottom up (like a bar graph)
+				using (var pen = new Pen(Color.FromArgb(110, 45, 45, 45), 1f))
+				{
+					for (int px = 0; px < width; px++)
+					{
+						int sampleIdx = (int)((double)px / width * peaks.Length);
+						if (sampleIdx >= peaks.Length) sampleIdx = peaks.Length - 1;
+
+						float peak = peaks[sampleIdx];
+						float lineHeight = peak * height;
+
+						g.DrawLine(pen, px, height, px, height - lineHeight);
+					}
+				}
+			}
+
+			return bmp;
+		}
+
+		#endregion
+
+		#region Bezier Handle Methods
+
+		/// <summary>
+		/// Direct MouseClick handler on ZedGraph control for toggling Bezier handles.
+		/// Uses right-click near a point to toggle handles.
+		/// </summary>
+		private void zedGraphControl_BezierMouseClick(object sender, MouseEventArgs e)
+		{
+			if (ReadonlyCurve) return;
+			if (zedGraphControl.GraphPane.CurveList.Count == 0) return;
+
+			CurveItem curve;
+			int pointIndex;
+
+			// Right-click: toggle Bezier handles
+			if (e.Button == MouseButtons.Right)
+			{
+				bool foundPoint = zedGraphControl.GraphPane.FindNearestPoint(e.Location, out curve, out pointIndex);
+
+				if (foundPoint)
+				{
+					PointPairList pointList = zedGraphControl.GraphPane.CurveList[0].Points as PointPairList;
+					if (pointList != null && pointIndex >= 0 && pointIndex < pointList.Count)
+					{
+						// Debug: directly set Tag and check
+						var pt = pointList[pointIndex];
+						string beforeTag = pt.Tag == null ? "null" : pt.Tag.GetType().Name;
+
+						ToggleBezierHandles(pointList, pointIndex);
+						UpdateHandleGraphObjects();
+					}
+				}
+				else
+				{
+					MessageBox.Show("Right-click detected but no point found nearby.", "Bezier Debug");
+				}
+			}
+		}
+
+		/// <summary>
+		/// Toggles Bezier handles on/off for a curve point.
+		/// When enabling, creates default handles with horizontal tangent,
+		/// length = 1/3 of distance to neighboring points.
+		/// </summary>
+		private void ToggleBezierHandles(PointPairList pointList, int pointIndex)
+		{
+			var point = pointList[pointIndex];
+
+			if (point.Tag is BezierHandleData)
+			{
+				// Remove handles
+				point.Tag = null;
+				return;
+			}
+
+			// Create new handles with sensible defaults
+			var handleData = new BezierHandleData();
+
+			bool isFirst = (pointIndex == 0);
+			bool isLast = (pointIndex == pointList.Count - 1);
+
+			handleData.HasInHandle = !isFirst;
+			handleData.HasOutHandle = !isLast;
+
+			// Default handle length: 1/3 of the distance to the neighboring point
+			if (handleData.HasInHandle)
+			{
+				double prevX = pointList[pointIndex - 1].X;
+				double dist = (point.X - prevX) / 3.0;
+				handleData.InHandleX = -dist; // points left
+				handleData.InHandleY = 0;     // horizontal tangent
+			}
+
+			if (handleData.HasOutHandle)
+			{
+				double nextX = pointList[pointIndex + 1].X;
+				double dist = (nextX - point.X) / 3.0;
+				handleData.OutHandleX = dist; // points right
+				handleData.OutHandleY = 0;    // horizontal tangent
+			}
+
+			point.Tag = handleData;
+		}
+
+		/// <summary>
+		/// Hit-tests for the nearest Bezier handle grip within a pixel tolerance.
+		/// Returns true if a handle grip was found near the mouse position.
+		/// </summary>
+		private bool FindNearestHandle(Point mouseLocation, out int pointIndex, out bool isInHandle)
+		{
+			const double PixelTolerance = 8.0;
+			pointIndex = -1;
+			isInHandle = false;
+
+			if (zedGraphControl.GraphPane.CurveList.Count == 0)
+				return false;
+
+			PointPairList pointList = zedGraphControl.GraphPane.CurveList[0].Points as PointPairList;
+			if (pointList == null)
+				return false;
+
+			double minDistSq = PixelTolerance * PixelTolerance;
+			bool found = false;
+
+			for (int i = 0; i < pointList.Count; i++)
+			{
+				var handleData = pointList[i].Tag as BezierHandleData;
+				if (handleData == null) continue;
+
+				double ptX = pointList[i].X;
+				double ptY = pointList[i].Y;
+
+				// Check in-handle grip
+				if (handleData.HasInHandle)
+				{
+					PointF gripScreen = TransformToScreen(ptX + handleData.InHandleX, ptY + handleData.InHandleY);
+					double dx = gripScreen.X - mouseLocation.X;
+					double dy = gripScreen.Y - mouseLocation.Y;
+					double distSq = dx * dx + dy * dy;
+					if (distSq < minDistSq)
+					{
+						minDistSq = distSq;
+						pointIndex = i;
+						isInHandle = true;
+						found = true;
+					}
+				}
+
+				// Check out-handle grip
+				if (handleData.HasOutHandle)
+				{
+					PointF gripScreen = TransformToScreen(ptX + handleData.OutHandleX, ptY + handleData.OutHandleY);
+					double dx = gripScreen.X - mouseLocation.X;
+					double dy = gripScreen.Y - mouseLocation.Y;
+					double distSq = dx * dx + dy * dy;
+					if (distSq < minDistSq)
+					{
+						minDistSq = distSq;
+						pointIndex = i;
+						isInHandle = false;
+						found = true;
+					}
+				}
+			}
+
+			return found;
+		}
+
+		/// <summary>
+		/// Transforms curve-space coordinates (0-100) to screen pixel coordinates.
+		/// </summary>
+		private PointF TransformToScreen(double curveX, double curveY)
+		{
+			var pane = zedGraphControl.GraphPane;
+			float screenX = pane.XAxis.Scale.Transform(curveX);
+			float screenY = pane.YAxis.Scale.Transform(curveY);
+			return new PointF(screenX, screenY);
+		}
+
+		/// <summary>
+		/// Paints Bezier handle lines and grip dots on top of the ZedGraph control.
+		/// </summary>
+		/// <summary>
+		/// Updates the ZedGraph GraphObjList with handle lines and grip dots.
+		/// Uses ZedGraph's native rendering so handles appear correctly.
+		/// </summary>
+		private void UpdateHandleGraphObjects()
+		{
+			var pane = zedGraphControl.GraphPane;
+
+			// Remove old handle objects (tagged with "bezier_handle")
+			for (int i = pane.GraphObjList.Count - 1; i >= 0; i--)
+			{
+				if (pane.GraphObjList[i].Tag is string tag && tag == "bezier_handle")
+					pane.GraphObjList.RemoveAt(i);
+			}
+
+			if (pane.CurveList.Count == 0) return;
+			PointPairList pointList = pane.CurveList[0].Points as PointPairList;
+			if (pointList == null || !pointList.HasBezierData()) return;
+
+			const double GripSize = 2.0; // in curve-space units
+
+			for (int i = 0; i < pointList.Count; i++)
+			{
+				var handleData = pointList[i].Tag as BezierHandleData;
+				if (handleData == null) continue;
+
+				double ptX = pointList[i].X;
+				double ptY = pointList[i].Y;
+
+				// Draw in-handle
+				if (handleData.HasInHandle)
+				{
+					double gripX = Math.Max(0, Math.Min(100, ptX + handleData.InHandleX));
+					double gripY = Math.Max(0, Math.Min(100, ptY + handleData.InHandleY));
+					AddHandleGraphObjects(pane, ptX, ptY, gripX, gripY, GripSize);
+				}
+
+				// Draw out-handle
+				if (handleData.HasOutHandle)
+				{
+					double gripX = Math.Max(0, Math.Min(100, ptX + handleData.OutHandleX));
+					double gripY = Math.Max(0, Math.Min(100, ptY + handleData.OutHandleY));
+					AddHandleGraphObjects(pane, ptX, ptY, gripX, gripY, GripSize);
+				}
+			}
+
+			zedGraphControl.Invalidate();
+		}
+
+		/// <summary>
+		/// Adds a handle line and grip dot to the GraphObjList with clean white styling.
+		/// </summary>
+		private void AddHandleGraphObjects(GraphPane pane, double ptX, double ptY, double gripX, double gripY, double gripSize)
+		{
+			// Handle line from anchor to grip
+			var line = new LineObj(Color.FromArgb(200, 255, 255, 255), ptX, ptY, gripX, gripY);
+			line.Line.Width = 1f;
+			line.Line.Style = System.Drawing.Drawing2D.DashStyle.Solid;
+			line.IsClippedToChartRect = false;
+			line.Location.CoordinateFrame = CoordType.AxisXYScale;
+			line.Tag = "bezier_handle";
+			pane.GraphObjList.Add(line);
+
+			// Grip dot
+			var grip = new EllipseObj(gripX - gripSize / 2, gripY + gripSize / 2, gripSize, gripSize);
+			grip.Fill = new Fill(Color.White);
+			grip.Border.Color = Color.FromArgb(180, 180, 180);
+			grip.Border.Width = 1f;
+			grip.Location.CoordinateFrame = CoordType.AxisXYScale;
+			grip.IsClippedToChartRect = false;
+			grip.Tag = "bezier_handle";
+			pane.GraphObjList.Add(grip);
+		}
+
+		#endregion
 	}
 }

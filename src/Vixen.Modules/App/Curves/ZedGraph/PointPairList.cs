@@ -69,6 +69,15 @@ namespace ZedGraph
 			get { return _sorted; }
 		}
 
+		/// <summary>
+		/// Marks the list as unsorted, forcing the next <see cref="Sort()"/> call
+		/// to actually perform the sort. Use after directly modifying point X values.
+		/// </summary>
+		public void SetSorted(bool value)
+		{
+			_sorted = value;
+		}
+
 		#endregion
 
 		#region Constructors
@@ -658,6 +667,151 @@ namespace ZedGraph
 
 			return (xTarget - this[lo].X)/(this[hi].X - this[lo].X)*
 			       (this[hi].Y - this[lo].Y) + this[lo].Y;
+		}
+
+		/// <summary>
+		/// Interpolate using cubic Bezier curves when <see cref="BezierHandleData"/> is present
+		/// in <see cref="PointPair.Tag"/>, falling back to linear interpolation otherwise.
+		/// </summary>
+		/// <param name="xTarget">The target X value on which to interpolate</param>
+		/// <returns>The Y value that corresponds to the <see paramref="xTarget"/> value.</returns>
+		public double BezierInterpolateX(double xTarget)
+		{
+			int lo, mid, hi;
+			if (this.Count < 2)
+				throw new Exception("Error: Not enough points in curve to interpolate");
+
+			if (xTarget <= this[0].X)
+			{
+				lo = 0;
+				hi = 1;
+			}
+			else if (xTarget >= this[this.Count - 1].X)
+			{
+				lo = this.Count - 2;
+				hi = this.Count - 1;
+			}
+			else
+			{
+				lo = 0;
+				hi = this.Count - 1;
+				int j;
+				for (j = 0; j < 1000 && hi > lo + 1; j++)
+				{
+					mid = (hi + lo) / 2;
+					if (xTarget > this[mid].X)
+						lo = mid;
+					else
+						hi = mid;
+				}
+				if (j >= 1000)
+					throw new Exception("Error: Infinite loop in interpolation");
+			}
+
+			// Check if either bounding point has Bezier handle data
+			var loHandle = this[lo].Tag as BezierHandleData;
+			var hiHandle = this[hi].Tag as BezierHandleData;
+
+			bool loHasOut = loHandle != null && loHandle.HasOutHandle;
+			bool hiHasIn = hiHandle != null && hiHandle.HasInHandle;
+
+			// If neither endpoint has relevant handles, use linear interpolation
+			if (!loHasOut && !hiHasIn)
+			{
+				if (this[hi].Y == this[lo].Y)
+					return this[hi].Y;
+
+				return (xTarget - this[lo].X) / (this[hi].X - this[lo].X) *
+				       (this[hi].Y - this[lo].Y) + this[lo].Y;
+			}
+
+			// Build cubic Bezier control points
+			double p0x = this[lo].X, p0y = this[lo].Y;
+			double p1x = this[hi].X, p1y = this[hi].Y;
+
+			// C1: out-handle of lo point (relative offset from lo)
+			double c1x = loHasOut ? p0x + loHandle.OutHandleX : p0x;
+			double c1y = loHasOut ? p0y + loHandle.OutHandleY : p0y;
+
+			// C2: in-handle of hi point (relative offset from hi)
+			double c2x = hiHasIn ? p1x + hiHandle.InHandleX : p1x;
+			double c2y = hiHasIn ? p1y + hiHandle.InHandleY : p1y;
+
+			// Clamp control points to enforce X monotonicity
+			if (c1x < p0x) c1x = p0x;
+			if (c1x > p1x) c1x = p1x;
+			if (c2x > p1x) c2x = p1x;
+			if (c2x < p0x) c2x = p0x;
+
+			// Solve for t where Bx(t) = xTarget
+			double t = BezierHandleData.SolveBezierT(xTarget, p0x, c1x, c2x, p1x);
+
+			// Evaluate By(t) at the found parameter
+			return BezierHandleData.CubicBezier(t, p0y, c1y, c2y, p1y);
+		}
+
+		/// <summary>
+		/// Samples a Bezier segment between two points into a list of intermediate points.
+		/// Used for rendering Bezier curves as polylines.
+		/// </summary>
+		/// <param name="p0">The start point of the segment</param>
+		/// <param name="p1">The end point of the segment</param>
+		/// <param name="samples">Number of sample points (including endpoints)</param>
+		/// <returns>A list of sampled points along the Bezier curve</returns>
+		public static PointPairList SampleBezierSegment(PointPair p0, PointPair p1, int samples)
+		{
+			var result = new PointPairList();
+
+			var loHandle = p0.Tag as BezierHandleData;
+			var hiHandle = p1.Tag as BezierHandleData;
+
+			bool loHasOut = loHandle != null && loHandle.HasOutHandle;
+			bool hiHasIn = hiHandle != null && hiHandle.HasInHandle;
+
+			if (!loHasOut && !hiHasIn)
+			{
+				// Linear segment, just return endpoints
+				result.Add(p0.X, p0.Y);
+				result.Add(p1.X, p1.Y);
+				return result;
+			}
+
+			double p0x = p0.X, p0y = p0.Y;
+			double p1x = p1.X, p1y = p1.Y;
+
+			double c1x = loHasOut ? p0x + loHandle.OutHandleX : p0x;
+			double c1y = loHasOut ? p0y + loHandle.OutHandleY : p0y;
+			double c2x = hiHasIn ? p1x + hiHandle.InHandleX : p1x;
+			double c2y = hiHasIn ? p1y + hiHandle.InHandleY : p1y;
+
+			// Clamp control points for X monotonicity
+			if (c1x < p0x) c1x = p0x;
+			if (c1x > p1x) c1x = p1x;
+			if (c2x > p1x) c2x = p1x;
+			if (c2x < p0x) c2x = p0x;
+
+			for (int i = 0; i < samples; i++)
+			{
+				double t = (double)i / (samples - 1);
+				double x = BezierHandleData.CubicBezier(t, p0x, c1x, c2x, p1x);
+				double y = BezierHandleData.CubicBezier(t, p0y, c1y, c2y, p1y);
+				result.Add(x, y);
+			}
+
+			return result;
+		}
+
+		/// <summary>
+		/// Returns true if any point in this list has <see cref="BezierHandleData"/> in its Tag.
+		/// </summary>
+		public bool HasBezierData()
+		{
+			for (int i = 0; i < this.Count; i++)
+			{
+				if (this[i].Tag is BezierHandleData)
+					return true;
+			}
+			return false;
 		}
 
 		/// <summary>
