@@ -21,13 +21,17 @@ It is a pixel effect (`PixelEffectBase`) and works in both **String** and
 | **Advance By** | How many LEDs the pattern moves at a time, and so how many light and go out together. The element is divided into fixed steps of this many LEDs; every LED in a step always shows the same brightness and the whole step switches as one — `2` moves and lights two at a time, `5` does five at a time. `1` = the pattern slides one LED at a time (classic marquee). Above `1`, **Lights On** and **Lights Off** are rounded to a whole number of steps so every group stays in step with the others. Auto‑capped at **Lights On** and snaps down if you lower Lights On. *(Stored as `FadeGroup` for backwards compatibility.)* |
 | **Speed** | A curve mapping to movement rate. Mapped **exponentially** (≈0.02 … 120 LEDs/sec) so most of the range is slow, fine control; a flat 0 stops it. |
 | **Randomness** | Slider 0–100. Shifts each lit **group as a whole** early or late by a fixed random amount; the LEDs inside a group never move relative to each other. The shift is *static*, so the pattern ends up unevenly spaced but still slides as one rigid piece. Colour is **not** jittered, only position. |
-| **Crawl** | Slider 0–100. Groups surge forward and back **in sequence**, each lagging the one before it, so the surge travels along the pattern — a metachronal wave, which is what makes a centipede look like it is walking rather than sliding. Unlike Randomness this varies over *time*, which is what gives it life. Stacks with Randomness (a crawl with a little randomness on top is the most organic result). |
-| **Crawl Speed** | Slider 0–100, ≈0.05 … 4 wave cycles/sec, exponentially mapped. **Independent of Speed**, so the pattern can crawl on the spot with Speed at 0. Hidden until Crawl is turned up. |
-| **Wave Length** | How many groups one surge spans (min 2). `2` puts neighbours in opposition for a fast scuttle, `4` is the classic centipede ripple, `10`+ is a long lazy body wave. Hidden until Crawl is turned up. |
+| **Ripples** | How many ripples run along the element at once (`0` = off). A ripple shoves every group it reaches forward by one **Advance By** step; the group then holds until the next ripple arrives. `1` is a single surge sweeping end to end, `4` is four chasing each other. Because it is a count *across the element*, the look is the same on a 50‑LED prop and a 500‑LED one. |
+| **Ripple Speed** | Slider 0–100, ≈0.05 … 6 ripples/sec, exponentially mapped. **Independent of Speed.** Hidden until Ripples is turned up. |
 
-Both Randomness and Crawl need a gap to move in — with **Lights Off = 0** there is nowhere to go and
-neither does anything. They share one budget (see below), so turning both up splits the range between
-them rather than doubling the movement.
+The ripples are real movement, not just a wobble: each one carries the pattern forward a step. Set
+**Speed to 0** and the ripples are the only motion — which is the point, because a group can then sit
+genuinely still between shoves instead of gliding through the pause. Leave Speed above 0 and you get a
+smooth glide with the stepping laid over it.
+
+Both Randomness and the ripples need a gap to move in — with **Lights Off = 0** there is nowhere to go
+and neither does anything. They share one budget (see below); the ripples are served first, so turning
+them on leaves Randomness a little less room.
 
 ### Color
 | Property | Meaning |
@@ -62,34 +66,51 @@ With **Fit To Element** on, `periodSteps` becomes
 step grid allows with no rounding error accumulating along the prop.
 
 Group `g`'s leading edge is
-`floor(g·periodSteps + 0.5)·AdvanceBy + GroupJitter(g) + GroupCrawl(g)` — snapped to a step boundary
+`floor(g·periodSteps + 0.5)·AdvanceBy + GroupJitter(g) + GroupRipple(g)` — snapped to a step boundary
 so all groups stay in step, with the two displacements added afterwards *un*snapped, since putting
 groups out of step with each other is the whole point of them.
 
-`GroupCrawl(g) = sin(2π·(crawlPhase − g/WaveLength)) · crawlAmount`. The `g/WaveLength` term is the
-per‑group lag that turns a synchronised bobbing into a wave travelling along the chain.
-`crawlPhase` is driven by elapsed **time**, not by `phase`, which is why the crawl keeps running with
-Speed at 0.
+### The ripples are a staircase, not a wave
+
+A group is either still waiting for the next ripple or has already been shoved by it, and
+`GroupRipple` is which of the two. That is deliberately a **step function**, because a smooth wave
+cannot hold still — it is never not moving, so it can only ever look like drifting, never like
+walking.
+
+```
+placeInQueue = mod(g, rippleGroups) / rippleGroups        // where g sits in the queue, 0..1
+GroupRipple(g) = rippleStep · (floor(ripplePhase − placeInQueue) − ripplePhase + 1)
+```
+
+`floor(...)` counts how many ripples have reached this group, so on its own it climbs forever. The
+climbing part is **identical for every group** and is genuine forward movement, so `UpdatePhase` puts
+it in the scroll (`phase = scrollPhase + rippleStep · ripplePhase`); subtracting it here leaves only
+the bounded stagger of who has been shoved and who has not. Splitting it this way is exactly what
+lets a group sit still: its own position stops changing between shoves, instead of creeping.
+
+Taking the queue position **modulo** the ripple spacing is what keeps the stagger periodic. Using `g`
+directly would add a term growing with `g`, quietly stretching the pattern out along its length.
+
+`ripplePhase` runs off elapsed **time**, not travel, so the ripples keep going with Speed at 0.
 
 ### Why the displacements are bounded
 
-Randomness and Crawl share one **gap‑closing budget**, split in proportion to the two sliders. Two
-things matter, and the obvious bound gets both wrong:
+Randomness and the ripples share one **gap‑closing budget**. Two things matter, and the obvious bound
+gets both wrong:
 
 - What costs gap is how far a group moves **relative to its neighbour**, not its absolute
-  displacement — two groups leaning towards each other both eat the same gap. A unit of Randomness
-  costs `2` (neighbours can sit at opposite extremes); a unit of Crawl costs `2·sin(π/WaveLength)`,
-  so a short wave is expensive and a long wave is nearly free. That is why long waves are allowed a
-  much bigger swing before the absolute cap (half the gap) takes over.
+  displacement — two groups leaning towards each other both eat the same gap. A shove costs one step
+  (any two groups differ by at most one ripple); a unit of Randomness costs `2`, since two neighbours
+  can sit at opposite extremes of their range at the same time.
 - Not overlapping is **not enough**. LEDs are discrete: if the dark space shrinks below one step, no
   LED lands in it and two groups read as a single run even though the maths never overlapped them.
   The budget is therefore `gap − AdvanceBy`, keeping one step in reserve so a dark LED always
   survives between groups.
 
-This is what keeps "exactly Lights On LEDs lit" true at every slider setting. Randomness alone almost
-never hits its worst case (it needs two adjacent hashes at opposite extremes), which is why the
-looser bound survived until Crawl — `Wave Length 2` puts neighbours in perfect opposition on *every*
-cycle, deterministically.
+The ripples are served first, because their shove is a fixed quantum rather than a slider — one step,
+the same unit the whole pattern is built on. Randomness gets what is left. Together this keeps
+"exactly Lights On LEDs lit" true at every setting, which is checked across every combination of the
+two.
 
 For each pixel, at movement‑axis coordinate `s`:
 
@@ -134,9 +155,11 @@ LEDs), so the string renderer always computes one line and reuses it across the 
 - **Randomness** used to be a per‑pixel offset seeded from both axes, which read as noise
   rather than as a marquee. It is now per group and bounded by the gap. Existing sequences
   with Randomness above 0 will look different (calmer and more marquee‑like).
-- **Crawl**'s wave travels backwards along the chain relative to travel, matching the retrograde gait
-  real centipedes use. If it reads the wrong way round on a prop it is a sign flip on the
-  `g / WaveLength` term in `GroupCrawl()`.
+- **Ripples** replaced an earlier sinusoidal "Crawl" (three controls: amount, speed, wave length).
+  A sine reads as drifting rather than walking, because it is always in motion and never plants.
+  The staircase does, and it needs two controls instead of three.
+- The ripple travels up the group index. If it reads the wrong way round on a prop it is a sign flip
+  on the `placeInQueue` term in `GroupRipple()`.
 - Location‑mode direction polarity (Up/Down/Left/Right on a matrix) is worth an
   eyeball; it is a one‑line sign flip if any axis reads backwards.
 - **Fit To Element** measures the movement axis of the render buffer: pixels‑per‑string for
