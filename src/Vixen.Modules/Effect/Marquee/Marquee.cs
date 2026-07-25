@@ -33,9 +33,12 @@ namespace VixenModules.Effect.Marquee
 		private const double MaxSpeedLedsPerSecond = 120.0;
 
 		/// <summary>
-		/// Fraction of a full pattern period an LED can be shifted by at maximum randomness.
+		/// Fraction of the gap a group can be shifted by at maximum randomness. Half a gap is the point
+		/// at which two groups leaning towards each other exactly meet, so staying at or below it means
+		/// the randomizer can never merge two groups or hide one behind another - every group keeps its
+		/// full width and only the spacing between them varies.
 		/// </summary>
-		private const double JitterFraction = 0.5;
+		private const double MaxJitterGapFraction = 0.5;
 
 		#endregion
 
@@ -51,10 +54,34 @@ namespace VixenModules.Effect.Marquee
 		// Values cached once per render in SetupRender.
 		private int _onCount;
 		private int _offCount;
-		private int _period;
+
+		/// <summary>
+		/// Length of one on+off cycle in LED units. Fractional when <see cref="FitToElement"/> stretches
+		/// the gap so a whole number of cycles spans the element exactly.
+		/// </summary>
+		private double _period;
+
 		private int _colorCount;
 		private double _fadeGroup;
-		private double _fadeWidth;
+
+		/// <summary>Number of banks in a lit group.</summary>
+		private int _onBanks;
+
+		/// <summary>
+		/// Width of a lit group in LEDs, rounded to a whole number of banks. This is the effective
+		/// Lights On; it differs from the requested value only when the step size does not divide it.
+		/// </summary>
+		private double _litWidth;
+
+		/// <summary>
+		/// The pattern period expressed in banks rather than LEDs. Group starts are laid out on this so
+		/// they always land on a bank boundary.
+		/// </summary>
+		private double _periodBanks;
+
+		/// <summary>Maximum per group timing offset in LED units (0 when Randomness is off).</summary>
+		private double _jitterAmount;
+
 		private bool _moveAlongX;
 		private double _dirSign;
 
@@ -156,7 +183,7 @@ namespace VixenModules.Effect.Marquee
 			{
 				if (value < 1) value = 1;
 				_data.OnCount = value;
-				// The fade group can never be wider than the lit group; snap it down if needed.
+				// The step can never be wider than the lit group; snap it down if needed.
 				if (_data.FadeGroup > value)
 				{
 					FadeGroup = value;
@@ -183,16 +210,38 @@ namespace VixenModules.Effect.Marquee
 			}
 		}
 
+		/// <summary>
+		/// Gets or sets whether the gap is padded so a whole number of on/off cycles spans the element
+		/// exactly. Lights Off is the minimum gap; the pattern is only ever spread out, never tightened.
+		/// </summary>
 		[Value]
 		[ProviderCategory(@"Config", 1)]
-		[ProviderDisplayName(@"Fade Group")]
-		[ProviderDescription(@"How many LEDs fade in and out together at each edge of the lit group.  1 = each LED fades one at a time (classic marquee); higher fades more LEDs together as a unit.  The center of the group always reaches full brightness.  Cannot exceed Lights On and snaps down automatically.")]
+		[ProviderDisplayName(@"Fit To Element")]
+		[ProviderDescription(@"Widens the gap so that a whole number of on/off groups fits exactly across the element.  The groups and gaps are then spaced evenly end to end and the pattern wraps seamlessly around the element.  Lights Off becomes the minimum gap - the gap is only ever padded, never reduced.")]
 		[PropertyOrder(3)]
+		public bool FitToElement
+		{
+			get { return _data.FitToElement; }
+			set
+			{
+				_data.FitToElement = value;
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
+		[Value]
+		[ProviderCategory(@"Config", 1)]
+		[ProviderDisplayName(@"Advance By")]
+		[ProviderDescription(@"How many LEDs the pattern moves at a time, and so how many light and go out together.  The element is divided into fixed steps of this many LEDs; every LED in a step always shows the same brightness and the whole step switches as one, so 2 moves and lights two at a time and 5 does five at a time.  1 = the pattern slides one LED at a time (classic marquee).  Above 1, Lights On and Lights Off are rounded to a whole number of steps so every group stays in step with the others.  Cannot exceed Lights On and snaps down automatically.")]
+		[PropertyOrder(4)]
 		public int FadeGroup
 		{
 			get { return _data.FadeGroup; }
 			set
 			{
+				// Kept as FadeGroup on the data model so existing sequences still deserialize; the UI calls
+				// it Advance By, which is what it actually does.
 				if (value < 1) value = 1;
 				else if (value > _data.OnCount) value = _data.OnCount;
 				_data.FadeGroup = value;
@@ -205,7 +254,7 @@ namespace VixenModules.Effect.Marquee
 		[ProviderCategory(@"Config", 1)]
 		[ProviderDisplayName(@"Speed")]
 		[ProviderDescription(@"Movement speed over the duration of the effect.  The low end of the curve is a very slow creep and the high end is fast; most of the range is devoted to slow motion.")]
-		[PropertyOrder(4)]
+		[PropertyOrder(5)]
 		public Curve SpeedCurve
 		{
 			get { return _data.SpeedCurve; }
@@ -220,10 +269,10 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Config", 1)]
 		[ProviderDisplayName(@"Randomness")]
-		[ProviderDescription(@"Adds a random per LED timing offset to when each LED fades and lights.  Off is a perfectly synced marquee; higher values give an organic crawling shimmer.")]
+		[ProviderDescription(@"Shifts each lit group as a whole, early or late, by a random amount.  The LEDs within a group always stay together - individual LEDs only move independently when Lights On is 1, where each group is a single LED.  Groups only shuffle within the gap between them, so they never merge or overlap; with Lights Off at 0 there is no gap to move in and this has no effect.  Off is a perfectly synced marquee.")]
 		[PropertyEditor("SliderEditor")]
 		[NumberRange(0, 100, 1)]
-		[PropertyOrder(5)]
+		[PropertyOrder(6)]
 		public int Randomness
 		{
 			get { return _data.Randomness; }
@@ -278,7 +327,7 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Brightness", 3)]
 		[ProviderDisplayName(@"Fade")]
-		[ProviderDescription(@"Shape of the fade ramp (off to full) applied over the Fade Group width at each edge of the lit group.  A straight line ramps evenly; an eased curve gives a warmer incandescent glow.  A flat curve gives hard bulbs with no fade.")]
+		[ProviderDescription(@"Brightness of an LED across its journey through a lit group, read left to right: the left of the curve is the moment it lights and the right is the moment before it goes dark.  Nothing else is applied on top, so the curve alone decides the shape - a rising line ramps up and snaps off, a falling line snaps on and ramps down, a curve peaking in the middle fades up and back down, and a flat line gives hard bulbs with no fade.  It applies to a whole step of LEDs at once, never across the LEDs within one.")]
 		[PropertyOrder(0)]
 		public Curve FadeCurve
 		{
@@ -338,18 +387,50 @@ namespace VixenModules.Effect.Marquee
 		{
 			_onCount = Math.Max(1, OnCount);
 			_offCount = Math.Max(0, OffCount);
-			_period = Math.Max(1, _onCount + _offCount);
 			_colorCount = Math.Max(1, Colors.Count);
-			// Fade group in LEDs (clamped to the lit group width).
-			_fadeGroup = Math.Min(Math.Max(1, FadeGroup), _onCount);
-			// Effective ramp half-width at each edge.  Capped at half the lit group so the middle always reaches
-			// full brightness -- this is what lets even a 1-LED-on marquee hit 100%.
-			_fadeWidth = Math.Min(_fadeGroup, _onCount / 2.0);
-			if (_fadeWidth < 0.5) _fadeWidth = 0.5;
 
 			// Determine which axis the pattern travels along and in which direction.
 			_moveAlongX = Direction == MarqueeDirection.Left || Direction == MarqueeDirection.Right;
 			_dirSign = (Direction == MarqueeDirection.Right || Direction == MarqueeDirection.Down) ? 1.0 : -1.0;
+
+			// Width of one bank of LEDs that lights and steps together (clamped to the lit group width).
+			_fadeGroup = Math.Min(Math.Max(1, FadeGroup), _onCount);
+
+			// Everything is laid out in whole banks.  Banks are fixed to the element, so a lit width or a
+			// pitch that was not a whole number of them would land every group on a different bank alignment
+			// and each group would then sit at its own point in the fade -- which reads as a chase running
+			// through the pattern instead of one pattern moving as a unit.  A whole number of banks also
+			// keeps the lit count constant instead of flickering between two values as the pattern moves.
+			// With a step of 1 (the default) none of this rounds anything.
+			_onBanks = Math.Max(1, (int)Math.Floor(_onCount / _fadeGroup + 0.5));
+			_litWidth = _onBanks * _fadeGroup;
+
+			// Rounding the gap up keeps Lights Off a minimum: it can be padded by up to one bank.
+			_periodBanks = _onBanks + Math.Ceiling(_offCount / _fadeGroup);
+
+			if (FitToElement)
+			{
+				// Spread the pattern so a whole number of cycles spans the element.  Dividing the element by
+				// the cycle count (rather than searching for an integer gap) keeps the spacing as even as the
+				// bank grid allows: the pitch may be a fractional number of banks, which is what stops a
+				// rounding error accumulating along the element.  The result is never shorter than the
+				// requested Lights On + Lights Off, so Lights Off still acts as a minimum gap.
+				int axisLength = _moveAlongX ? BufferWi : BufferHt;
+				double axisBanks = Math.Floor(axisLength / _fadeGroup);
+				double repeats = Math.Floor(axisBanks / _periodBanks);
+				if (repeats >= 1)
+				{
+					_periodBanks = axisBanks / repeats;
+				}
+			}
+
+			_period = _periodBanks * _fadeGroup;
+
+			// Largest amount a single group can be shifted early or late by the randomizer.  It is scaled
+			// by the gap rather than the whole period so groups shuffle within the dark space between them
+			// instead of running into each other.  With no gap at all there is nowhere to move.
+			double gap = Math.Max(0.0, _period - _litWidth);
+			_jitterAmount = Randomness <= 0 ? 0.0 : (Randomness / 100.0) * gap * MaxJitterGapFraction;
 
 			// Pre-sample the fade curve into a lookup table.
 			_lutSize = 257;
@@ -386,53 +467,36 @@ namespace VixenModules.Effect.Marquee
 			int height = BufferHt;
 			int axisLength = _moveAlongX ? width : height;
 
-			// When there is no randomness the pattern is identical across the axis perpendicular to the movement,
-			// so we can evaluate each position along the movement axis just once and reuse it across the rows/columns.
-			if (Randomness <= 0)
+			// The pattern only varies along the movement axis -- the randomizer shifts whole groups rather
+			// than individual LEDs, so a group looks the same right across the perpendicular axis.  One line
+			// is therefore evaluated and reused across the rows/columns.
+			Color[] line = new Color[axisLength];
+			for (int s = 0; s < axisLength; s++)
 			{
-				Color[] line = new Color[axisLength];
-				for (int s = 0; s < axisLength; s++)
-				{
-					line[s] = RenderPixel(s, axisLength, 0.0, level);
-				}
+				line[s] = RenderPixel(s, axisLength, level);
+			}
 
-				if (_moveAlongX)
+			if (_moveAlongX)
+			{
+				for (int x = 0; x < width; x++)
 				{
-					for (int x = 0; x < width; x++)
-					{
-						Color c = line[x];
-						if (c.A == 0) continue;
-						for (int y = 0; y < height; y++)
-						{
-							frameBuffer.SetPixel(x, y, c);
-						}
-					}
-				}
-				else
-				{
+					Color c = line[x];
+					if (c.A == 0) continue;
 					for (int y = 0; y < height; y++)
 					{
-						Color c = line[y];
-						if (c.A == 0) continue;
-						for (int x = 0; x < width; x++)
-						{
-							frameBuffer.SetPixel(x, y, c);
-						}
+						frameBuffer.SetPixel(x, y, c);
 					}
 				}
 			}
 			else
 			{
-				for (int x = 0; x < width; x++)
+				for (int y = 0; y < height; y++)
 				{
-					for (int y = 0; y < height; y++)
+					Color c = line[y];
+					if (c.A == 0) continue;
+					for (int x = 0; x < width; x++)
 					{
-						double s = _moveAlongX ? x : y;
-						Color c = RenderPixel(s, axisLength, GetJitter(x, y), level);
-						if (c.A != 0)
-						{
-							frameBuffer.SetPixel(x, y, c);
-						}
+						frameBuffer.SetPixel(x, y, c);
 					}
 				}
 			}
@@ -460,7 +524,7 @@ namespace VixenModules.Effect.Marquee
 					int zy = location.Y - BufferHtOffset;
 
 					double s = _moveAlongX ? zx : zy;
-					Color c = RenderPixel(s, axisLength, GetJitter(zx, zy), level);
+					Color c = RenderPixel(s, axisLength, level);
 					if (c.A != 0)
 					{
 						frameBuffer.SetPixel(location.X, location.Y, c);
@@ -514,21 +578,84 @@ namespace VixenModules.Effect.Marquee
 		}
 
 		/// <summary>
-		/// Calculates the per LED random timing offset (in LED units) for the pixel at the specified coordinate.
-		/// The offset is a stable function of the coordinate so a given LED consistently leads or lags.
+		/// Random timing offset for a whole lit group, in LED units.  The offset is a stable function of the
+		/// group index so a given group consistently leads or lags, and every LED inside it moves with it.
 		/// </summary>
-		/// <param name="x">Pixel X coordinate</param>
-		/// <param name="y">Pixel Y coordinate</param>
+		/// <param name="group">Index of the group within the scrolling pattern</param>
 		/// <returns>Phase offset in LED units</returns>
-		private double GetJitter(int x, int y)
+		private double GroupJitter(long group)
 		{
-			if (Randomness <= 0)
+			if (_jitterAmount <= 0.0)
 			{
 				return 0.0;
 			}
 
-			double signed = Hash01(x, y) * 2.0 - 1.0;
-			return signed * (Randomness / 100.0) * _period * JitterFraction;
+			return (Hash01(group) * 2.0 - 1.0) * _jitterAmount;
+		}
+
+		/// <summary>
+		/// Leading edge of a lit group in pattern space.
+		/// </summary>
+		/// <remarks>
+		/// Group starts are snapped to a bank boundary. Banks are fixed to the element, so a group starting
+		/// part way through one would sit at a different point in the fade from its neighbours and the
+		/// pattern would read as a chase running through it rather than as one pattern moving as a unit.
+		/// Snapping puts every group on the same alignment, so they all fade in step. The rounding is what
+		/// makes the spacing alternate between the floor and the ceiling of the pitch when
+		/// <see cref="FitToElement"/> makes that fractional, which is the closest an evenly spaced pattern
+		/// can get on a discrete strip, and it still lands the last group on the end of the element.
+		/// Randomness is added afterwards and is deliberately not snapped - that per group offset is the
+		/// whole point of it.
+		/// </remarks>
+		/// <param name="group">Index of the group within the scrolling pattern</param>
+		/// <returns>Position of the group's leading edge in pattern space</returns>
+		private double GroupStart(long group)
+		{
+			// Floor(x + 0.5) rather than Math.Round: banker's rounding would pull every other exact half
+			// the wrong way and make the spacing lumpy.
+			return Math.Floor(group * _periodBanks + 0.5) * _fadeGroup + GroupJitter(group);
+		}
+
+		/// <summary>
+		/// Finds the lit group a bank falls inside, if any.
+		/// </summary>
+		/// <remarks>
+		/// A bank is in or out as a unit, decided on its centre. Because group starts sit on bank boundaries
+		/// and a group is a whole number of banks wide, exactly <see cref="_onBanks"/> banks are lit at every
+		/// instant: the lit count never flickers, and a group is never drawn wider than it was asked to be.
+		/// Both the start snapping and the randomizer can move a group off the cell the evenly spaced maths
+		/// would put it in, so the neighbours either side are tested too; both displacements are well under
+		/// half a period, so one group either way is always enough. Where two groups could claim the bank the
+		/// one holding it further from its own edge wins.
+		/// </remarks>
+		/// <param name="centre">Centre of the bank in pattern space (movement already applied)</param>
+		/// <param name="group">Index of the group owning the bank; undefined when the method returns false</param>
+		/// <param name="offset">Bank centre's position within the owning group, 0 to <see cref="_litWidth"/></param>
+		/// <returns>True if the bank falls inside a lit group; false if it is in a gap</returns>
+		private bool TryFindGroup(double centre, out long group, out double offset)
+		{
+			long nearest = (long)Math.Floor(centre / _period);
+
+			double bestEdge = -1.0;
+			bool found = false;
+			group = nearest;
+			offset = 0.0;
+
+			for (long g = nearest - 1; g <= nearest + 1; g++)
+			{
+				double local = centre - GroupStart(g);
+				if (local < 0.0 || local >= _litWidth) continue;
+
+				double edge = Math.Min(local, _litWidth - local);
+				if (edge <= bestEdge) continue;
+
+				bestEdge = edge;
+				group = g;
+				offset = local;
+				found = true;
+			}
+
+			return found;
 		}
 
 		/// <summary>
@@ -537,29 +664,30 @@ namespace VixenModules.Effect.Marquee
 		/// </summary>
 		/// <param name="s">Coordinate of the pixel along the movement axis (zero based)</param>
 		/// <param name="axisLength">Length of the movement axis</param>
-		/// <param name="jitter">Per LED random phase offset in LED units</param>
 		/// <param name="level">Overall brightness level for the frame (0..1)</param>
 		/// <returns>The color for the pixel, or transparent if it is off</returns>
-		private Color RenderPixel(double s, int axisLength, double jitter, double level)
+		private Color RenderPixel(double s, int axisLength, double level)
 		{
-			// Colour uses the un-jittered position so colour groups stay stable (no bleed between gradients);
-			// the fade timing uses the jittered position so the randomness makes each LED crawl independently.
-			double sColour = s - _dirSign * _phase;
-			double sFade = sColour + jitter;
+			// The element is divided into fixed banks of the step size and the whole bank is treated as one
+			// lamp, so every LED in it shares a brightness and switches with it.  An LED covers [s, s+1), so
+			// the bank containing it spans [b, b+step) and its centre is half a step in.
+			double centre = (Math.Floor(s / _fadeGroup) + 0.5) * _fadeGroup - _dirSign * _phase;
 
-			// Position within the scrolling pattern.
-			double c = Mod(sFade, _period);
-			if (c >= _onCount)
+			long group;
+			double c;
+			if (!TryFindGroup(centre, out group, out c))
 			{
 				// In the dark gap between groups.
 				return Color.Transparent;
 			}
 
-			// Fade ramp: off at each edge of the lit group, rising to full once _fadeWidth LEDs inside, and full
-			// across the middle.  Motion stays smooth because c is continuous; a flat fade curve gives instant on/off.
-			double dEdge = Math.Min(c, _onCount - c);
-			double u = dEdge / _fadeWidth;
-			if (u > 1.0) u = 1.0;
+			// The Fade curve is read across the bank's journey through the lit group: 0 the moment it lights
+			// and 1 just before it goes dark, whichever way the pattern is travelling.  Nothing is layered on
+			// top of it, so the curve alone decides the shape -- a rising line ramps up and snaps off, a
+			// falling line snaps on and ramps down, and a curve that peaks in the middle fades both ways.
+			double u = _dirSign > 0.0 ? (_litWidth - c) / _litWidth : c / _litWidth;
+			if (u < 0.0) u = 0.0;
+			else if (u > 1.0) u = 1.0;
 			int idx = (int)(u * (_lutSize - 1) + 0.5);
 			if (idx < 0) idx = 0;
 			else if (idx > _lutSize - 1) idx = _lutSize - 1;
@@ -570,7 +698,7 @@ namespace VixenModules.Effect.Marquee
 				return Color.Transparent;
 			}
 
-			Color baseColor = GetBaseColor(sColour, c, s, axisLength);
+			Color baseColor = GetBaseColor(group, c, s, axisLength);
 
 			HSV hsv = HSV.FromRGB(baseColor);
 			hsv.V *= (float)brightness;
@@ -581,12 +709,12 @@ namespace VixenModules.Effect.Marquee
 		/// <summary>
 		/// Determines the (un-dimmed) color for a pixel based on the selected color mode.
 		/// </summary>
-		/// <param name="sColour">Un-jittered scrolling position, used to pick a stable colour group</param>
-		/// <param name="cFade">Position within the lit group (0..OnCount), used for the gradient across the group</param>
+		/// <param name="group">Index of the lit group the pixel belongs to, used to pick a stable colour</param>
+		/// <param name="cFade">Position within the lit group (0..<see cref="_litWidth"/>), used for the gradient across the group</param>
 		/// <param name="s">Fixed coordinate of the pixel along the movement axis (zero based)</param>
 		/// <param name="axisLength">Length of the movement axis</param>
 		/// <returns>The base color for the pixel</returns>
-		private Color GetBaseColor(double sColour, double cFade, double s, int axisLength)
+		private Color GetBaseColor(long group, double cFade, double s, int axisLength)
 		{
 			// Defensive: if the palette was emptied in the UI, fall back to white rather than throwing.
 			if (Colors.Count == 0)
@@ -598,8 +726,8 @@ namespace VixenModules.Effect.Marquee
 			{
 				case MarqueeColorMode.GradientAcrossGroup:
 				{
-					int colorIndex = GetGroupColorIndex(sColour);
-					double u = cFade / _onCount;
+					int colorIndex = GetGroupColorIndex(group);
+					double u = cFade / _litWidth;
 					if (u > 1.0) u = 1.0;
 					else if (u < 0.0) u = 0.0;
 					return Colors[colorIndex].GetColorAt(u);
@@ -625,23 +753,21 @@ namespace VixenModules.Effect.Marquee
 
 				default: // MarqueeColorMode.SolidPerGroup
 				{
-					int colorIndex = GetGroupColorIndex(sColour);
+					int colorIndex = GetGroupColorIndex(group);
 					return Colors[colorIndex].GetColorAt(0.0);
 				}
 			}
 		}
 
 		/// <summary>
-		/// Returns the color list index for the group that contains the specified pattern position.  Consecutive
-		/// groups step through the color list and each colored group travels with the pattern.
+		/// Returns the color list index for a group.  Consecutive groups step through the color list and each
+		/// colored group travels with the pattern.
 		/// </summary>
-		/// <param name="sBase">Continuous scrolling position within the pattern</param>
+		/// <param name="group">Index of the group within the scrolling pattern</param>
 		/// <returns>Index into the color list</returns>
-		private int GetGroupColorIndex(double sBase)
+		private int GetGroupColorIndex(long group)
 		{
-			long group = (long)Math.Floor(sBase / _period);
-			int index = (int)(((group % _colorCount) + _colorCount) % _colorCount);
-			return index;
+			return (int)(((group % _colorCount) + _colorCount) % _colorCount);
 		}
 
 		/// <summary>
@@ -658,17 +784,19 @@ namespace VixenModules.Effect.Marquee
 		}
 
 		/// <summary>
-		/// Deterministic hash of a pixel coordinate to a value in the range [0, 1).
+		/// Deterministic hash of a group index to a value in the range [0, 1).
 		/// </summary>
-		private static double Hash01(int x, int y)
+		private static double Hash01(long value)
 		{
 			unchecked
 			{
-				uint h = (uint)(x * 73856093) ^ (uint)(y * 19349663);
-				h ^= h >> 13;
-				h *= 0x85ebca6bu;
-				h ^= h >> 16;
-				return (h & 0xFFFFFFu) / (double)0x1000000u;
+				ulong h = (ulong)value * 0x9E3779B97F4A7C15UL;
+				h ^= h >> 30;
+				h *= 0xBF58476D1CE4E5B9UL;
+				h ^= h >> 27;
+				h *= 0x94D049BB133111EBUL;
+				h ^= h >> 31;
+				return (h >> 11) * (1.0 / 9007199254740992.0);
 			}
 		}
 
