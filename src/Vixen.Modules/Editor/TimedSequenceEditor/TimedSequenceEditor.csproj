@@ -28,6 +28,7 @@
 		  <ProjectReference Include="..\..\..\Vixen.Common\Broadcast\Broadcast.csproj" />
 		  <ProjectReference Include="..\..\..\Vixen.Common\Controls\Controls.csproj" />
 		  <ProjectReference Include="..\..\..\Vixen.Common\ElementTagManager\ElementTagManager.csproj" />
+		  <ProjectReference Include="..\..\..\Vixen.Common\ffmpeg\ffmpeg.csproj" />
 		  <ProjectReference Include="..\..\..\Vixen.Common\Help\Help.csproj" />
 		  <ProjectReference Include="..\..\..\Vixen.Common\Resources\Resources.csproj" />
 		  <ProjectReference Include="..\..\..\Vixen.Common\Utilities\Utilities.csproj" />
@@ -46,6 +47,7 @@
 		  <ProjectReference Include="..\..\Effect\Shapes\Shapes.csproj" />
 		  <ProjectReference Include="..\..\Media\Audio\Audio.csproj" />
 		  <ProjectReference Include="..\..\Property\Color\Color.csproj" />
+		  <ProjectReference Include="..\..\Preview\VixenPreview\VixenPreview.csproj" />
 		  <ProjectReference Include="..\..\Property\Face\Face.csproj" />
 		  <ProjectReference Include="..\..\Sequence\Timed\Timed.csproj" />
 		  <ProjectReference Include="..\EffectEditor\EffectEditor.csproj" />
