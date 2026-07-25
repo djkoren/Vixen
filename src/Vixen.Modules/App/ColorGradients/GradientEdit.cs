@@ -23,6 +23,11 @@ namespace VixenModules.App.ColorGradients
 		private bool _discreteColors;
 		private IEnumerable<Color> _validDiscreteColors;
 
+		/// <summary>
+		/// Optional mark positions (0-100) with colors, drawn as vertical lines on the gradient.
+		/// </summary>
+		public List<(double Position, Color Color)> MarkPositions { get; set; }
+
 		#endregion
 
 		public GradientEdit()
@@ -343,6 +348,60 @@ namespace VixenModules.App.ColorGradients
 				if (_selection != null && _selection.Count > 0)
 					DrawDiamond(e.Graphics, _blend.GetFocusPosition(_selection.First()),
 					            _selection.First() is AlphaPoint, _focussel);
+			}
+
+			// Draw mark lines on top of everything
+			if (MarkPositions != null && MarkPositions.Count > 0)
+			{
+				Rectangle markArea = new Rectangle(_border, _border,
+				                               this.Width - _border * 2 - 1, this.Height - _border * 3 - 1);
+
+				// Use pixel-snapped coordinates for crisp lines
+				var savedSmoothing = e.Graphics.SmoothingMode;
+				e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+
+				// Marks cover the bottom quarter of the gradient color area with rounded tops
+				int markHeight = (int)(markArea.Height * 0.22);
+				int markBottom = markArea.Bottom;
+				int markTop = markBottom - markHeight;
+				int capRadius = 3; // rounded cap radius
+
+				var savedSmoothing2 = e.Graphics.SmoothingMode;
+				e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+
+				foreach (var (position, color) in MarkPositions)
+				{
+					int screenX = markArea.Left + (int)Math.Round(position / 100.0 * markArea.Width);
+
+					// Draw rounded-top mark using a path: rounded rect pill shape
+					using (var path = new System.Drawing.Drawing2D.GraphicsPath())
+					{
+						int left = screenX - 2;
+						int width = 4;
+
+						// Rounded top, flat bottom
+						path.AddArc(left, markTop, width, capRadius * 2, 180, 180); // rounded top
+						path.AddLine(left + width, markTop + capRadius, left + width, markBottom); // right side
+						path.AddLine(left + width, markBottom, left, markBottom); // bottom
+						path.AddLine(left, markBottom, left, markTop + capRadius); // left side
+						path.CloseFigure();
+
+						// Black outline
+						using (var outlinePen = new Pen(Color.FromArgb(180, 0, 0, 0), 1.5f))
+						{
+							e.Graphics.DrawPath(outlinePen, path);
+						}
+						// White fill
+						using (var fillBrush = new SolidBrush(Color.FromArgb(210, 255, 255, 255)))
+						{
+							e.Graphics.FillPath(fillBrush, path);
+						}
+					}
+				}
+
+				e.Graphics.SmoothingMode = savedSmoothing2;
+
+				e.Graphics.SmoothingMode = savedSmoothing;
 			}
 		}
 

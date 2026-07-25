@@ -21,6 +21,7 @@ namespace VixenModules.Editor.TimedSequenceEditor
 		private static readonly NLog.Logger Logging = NLog.LogManager.GetCurrentClassLogger();
 		private readonly List<Element> _elements = new List<Element>();
 		private readonly TimedSequenceEditorForm _sequenceEditorForm;
+
 		private PreviewContext _previewContext;
 		private readonly Timer _previewLoopTimer = new Timer();
 		private readonly EffectPropertyEditorGrid _effectPropertyEditorGridEffectEffectPropertiesEditor;
@@ -55,6 +56,24 @@ namespace VixenModules.Editor.TimedSequenceEditor
 				Interval = TimeSpan.FromMilliseconds(200)
 			};
 			_selectionChangeBuffer.Tick += _selectionChangeBuffer_Tick;
+
+			// Store the sequence's audio and marks for use by the CurveEditor waveform/marks display
+			if (sequenceEditorForm.Sequence != null)
+			{
+				var allMedia = sequenceEditorForm.Sequence.GetAllMedia();
+				if (allMedia != null)
+				{
+					var audioMedia = allMedia.FirstOrDefault() as VixenModules.Media.Audio.Audio;
+					if (audioMedia != null)
+					{
+						VixenModules.Editor.EffectEditor.Editors.CurveEditor.ActiveSequenceAudio = audioMedia;
+					}
+				}
+
+				// Store mark collections from the sequence
+				VixenModules.Editor.EffectEditor.Editors.CurveEditor.ActiveMarkCollections =
+					sequenceEditorForm.Sequence.LabeledMarkCollections;
+			}
 
 			sequenceEditorForm.TimelineControl.SelectionChanged += timelineControl_SelectionChanged;
 			_effectPropertyEditorGridEffectEffectPropertiesEditor.PropertyValueChanged += EffectPropertyEditorValueChanged;
