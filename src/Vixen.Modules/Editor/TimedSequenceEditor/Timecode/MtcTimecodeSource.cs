@@ -58,6 +58,7 @@ namespace VixenModules.Editor.TimedSequenceEditor.Timecode
 		private long _lastMessageStamp;
 		private volatile TimecodeState _state = TimecodeState.NoSignal;
 		private volatile TimecodeFrameRate _frameRate;
+		private volatile bool _frameRateDetected;
 
 		public event EventHandler<TimecodeStateChangedEventArgs>? StateChanged;
 		public event EventHandler<TimecodeLocateEventArgs>? Located;
@@ -77,6 +78,8 @@ namespace VixenModules.Editor.TimedSequenceEditor.Timecode
 		public TimecodeState State => _state;
 
 		public TimecodeFrameRate FrameRate => _frameRate;
+
+		public bool IsFrameRateKnown => !_autoFrameRate || _frameRateDetected;
 
 		public TimeSpan Position
 		{
@@ -126,6 +129,7 @@ namespace VixenModules.Editor.TimedSequenceEditor.Timecode
 			midiInStart(_handle);
 
 			_isOpen = true;
+			_frameRateDetected = false;
 			Volatile.Write(ref _lastMessageStamp, Stopwatch.GetTimestamp());
 			lock (_decodeLock) { _seenMask = 0; }
 			SetState(TimecodeState.NoSignal);
@@ -263,7 +267,9 @@ namespace VixenModules.Editor.TimedSequenceEditor.Timecode
 			if (complete)
 			{
 				var rate = _autoFrameRate ? RateFromBits(rateBits) : _forcedFrameRate;
-				if (rate != _frameRate)
+				bool firstDetection = _autoFrameRate && !_frameRateDetected;
+				_frameRateDetected = true;
+				if (rate != _frameRate || firstDetection)
 				{
 					_frameRate = rate;
 					RaiseStateChanged();
