@@ -17,9 +17,10 @@ It is a pixel effect (`PixelEffectBase`) and works in both **String** and
 | **Direction** | Which way the pattern travels: Right, Left, Down, Up. |
 | **Lights On** | Number of LEDs lit in each group (typed number, min 1). |
 | **Lights Off** | Number of dark LEDs in the gap between groups (typed number, min 0). |
-| **Fade Group** | How many LEDs fade in/out **together** at each edge of the lit group. `1` = each LED fades one at a time (classic marquee); larger fades more LEDs as a unit. Auto‑capped at **Lights On** and snaps down if you lower Lights On. The middle of the group always reaches full brightness. |
+| **Fit To Element** | Pads the gap so a whole number of `[on][off]` cycles spans the element **exactly** — groups and gaps end up evenly spaced end to end and the pattern wraps seamlessly around the prop. Lights Off is the **minimum** gap; the pattern is only ever spread out, never tightened. Off by default. |
+| **Advance By** | How many LEDs the pattern moves at a time, and so how many light and go out together. The element is divided into fixed steps of this many LEDs; every LED in a step always shows the same brightness and the whole step switches as one — `2` moves and lights two at a time, `5` does five at a time. `1` = the pattern slides one LED at a time (classic marquee). Above `1`, **Lights On** and **Lights Off** are rounded to a whole number of steps so every group stays in step with the others. Auto‑capped at **Lights On** and snaps down if you lower Lights On. *(Stored as `FadeGroup` for backwards compatibility.)* |
 | **Speed** | A curve mapping to movement rate. Mapped **exponentially** (≈0.02 … 120 LEDs/sec) so most of the range is slow, fine control; a flat 0 stops it. |
-| **Randomness** | Slider 0–100. Adds a stable per‑LED timing offset to when each LED fades/lights. `0` = perfectly synced marquee; higher = organic crawling shimmer. Colour is **not** jittered, only fade timing. |
+| **Randomness** | Slider 0–100. Shifts each lit **group as a whole** early or late; the LEDs inside a group never move relative to each other. Individual LEDs only move independently when **Lights On = 1**, where each group *is* one LED. The shift is bounded by half the gap so groups never merge, overlap or swallow each other — only the spacing between them varies. With **Lights Off = 0** there is no gap to move in and this has no effect. Colour is **not** jittered, only timing. |
 
 ### Color
 | Property | Meaning |
@@ -30,7 +31,7 @@ It is a pixel effect (`PixelEffectBase`) and works in both **String** and
 ### Brightness
 | Property | Meaning |
 | --- | --- |
-| **Fade** | The shape of the fade ramp (off → full) applied over the Fade Group width at each edge. A straight line ramps evenly; an eased curve gives a warmer glow; a **flat 100 line = instant on/off** (hard bulbs, no fade); a flat 0 line = off. |
+| **Fade** | Brightness of an LED across its **journey through a lit group**, read left to right: the left of the curve is the moment it lights, the right is the moment before it goes dark. Nothing is layered on top, so the curve alone decides the shape — a **rising line ramps up then snaps off**, a **falling line snaps on then ramps down**, a curve **peaking in the middle fades up and back down**, a **flat 100 line = hard bulbs** (instant on/off), a flat 0 line = off. It applies to a whole step of LEDs at once, never across the LEDs within one. |
 | **Brightness** | Overall level of the whole effect over its duration. |
 
 ## How it renders
@@ -39,22 +40,44 @@ Everything keys off a single continuous scroll position, `_phase`, accumulated p
 frame from the Speed curve (in LED units). Because it is fractional, slow motion is
 smooth — there is no snapping to whole pixels like Bars.
 
+Everything is laid out on the **step grid**: the element is divided into fixed steps of `AdvanceBy`
+LEDs, and both the lit width and the pattern pitch are whole numbers of steps —
+`onSteps = round(OnCount / AdvanceBy)`, `litWidth = onSteps · AdvanceBy`, and
+`periodSteps = onSteps + ceil(OffCount / AdvanceBy)`. Steps are fixed to the element, so a lit width
+or pitch that was not a whole number of them would land every group on a different step alignment
+and each group would then sit at its own point in the fade — which reads as a chase running
+*through* the pattern instead of one pattern moving as a unit. It would also make the lit count
+flicker between two values as the pattern moved. With `AdvanceBy = 1` none of this rounds anything.
+
+With **Fit To Element** on, `periodSteps` becomes
+`floor(axisLength/AdvanceBy) / floor(that / periodSteps)`, deliberately allowed to be
+**fractional**: dividing the element by a whole cycle count is what makes the spacing as even as the
+step grid allows with no rounding error accumulating along the prop.
+
+Group `g`'s leading edge is `floor(g·periodSteps + 0.5)·AdvanceBy + GroupJitter(g)` — snapped to a
+step boundary so all groups stay in step, with the randomizer added afterwards *un*snapped, since
+that per‑group offset is the whole point of it.
+
 For each pixel, at movement‑axis coordinate `s`:
 
-1. **Colour position** `sColour = s − dir·phase` (un‑jittered) and **fade position**
-   `sFade = sColour + jitter`. Colour uses the un‑jittered value so colour groups never
-   bleed; only the fade timing is jittered (that is the randomizer / crawl).
-2. `c = sFade mod (OnCount+OffCount)`. If `c ≥ OnCount` the pixel is in the gap → off.
-3. Fade ramp: `dEdge = min(c, OnCount − c)`, `u = min(dEdge / fadeWidth, 1)`,
-   `brightness = FadeCurve(u) · Level`. `fadeWidth = min(FadeGroup, OnCount/2)` so the
-   centre of every group reaches 100% even when `Lights On = 1`.
-4. Colour comes from `Color Mode` evaluated at `sColour` (group index) and `c`
-   (position within the group for gradients).
+1. **Step centre** `centre = (floor(s/AdvanceBy) + 0.5)·AdvanceBy − dir·phase`. The whole step is
+   treated as one lamp, so every LED in it shares a brightness.
+2. Find the owning group: `local = centre − GroupStart(g)` must lie in `[0, litWidth)`, else the
+   step is in a gap → off. `g−1 … g+1` are tested, since both the step snapping and the randomizer
+   can move a group off its nominal cell; where two could claim the step, the one holding it
+   further from its own edge wins. Because starts sit on step boundaries and a group is a whole
+   number of steps wide, **exactly `onSteps` steps are lit at every instant**.
+3. Fade: `u` is the step's progress through the group — `0` the moment it lights, `1` just before
+   it goes dark (`u = (litWidth − local)/litWidth`, or `local/litWidth` when travelling the other
+   way, so reversing direction does not invert the shape). `brightness = FadeCurve(u) · Level`.
+   Nothing is layered on top of the curve, so the curve alone decides the shape.
+4. Colour comes from `Color Mode`, keyed on the group index `g` and on `local` (for gradients).
+   `Gradient Along Prop` uses the true `s` instead, since that gradient is fixed to the prop rather
+   than to the moving pattern.
 
-There is intentionally **no supersampling** — a flat Fade curve therefore snaps
-instantly on/off, and a sloped curve gives smooth fades. When Randomness is 0 the
-string renderer computes one line along the movement axis and reuses it across the
-perpendicular axis for speed.
+There is intentionally **no supersampling** — a flat Fade curve therefore snaps instantly on/off.
+The pattern varies only along the movement axis (randomness moves whole groups, not individual
+LEDs), so the string renderer always computes one line and reuses it across the perpendicular axis.
 
 ## Files
 - `Marquee.cs` — effect logic (properties + rendering).
@@ -65,8 +88,21 @@ perpendicular axis for speed.
 - Registered in `Vixen.sln` (project GUID `477703A1‑64AC‑4741‑AB44‑481EC4EFF0CF`).
 
 ## Notes / possible future work
-- **Fade Group** currently controls the *fade‑front width* (how many LEDs fade
-  together at the edges). If discrete, hard‑switched banks of N are wanted instead,
-  that is a different model and can be added.
+- **Advance By** (was "Fade Group") used to be a *fade‑front width* (a short gradient across the
+  LEDs at each edge). It is now a discrete step of N LEDs that moves and switches together. It is
+  still persisted as `FadeGroup`, so old sequences load unchanged.
+- The **Fade** curve used to be read as a spatial ramp measured from the edges of the lit group,
+  which layered a built‑in fade‑in *and* fade‑out on top of whatever curve you drew — a rising line
+  came out symmetrical instead of ramping up and snapping off. It is now read straight across an
+  LED's journey through the group, so the curve is the whole story.
+- The default **Fade** curve is still a rising line, which under the new reading means *ramp up,
+  snap off*. A curve peaking in the middle is the classic incandescent look if that is wanted as
+  the default instead.
+- **Randomness** used to be a per‑pixel offset seeded from both axes, which read as noise
+  rather than as a marquee. It is now per group and bounded by the gap. Existing sequences
+  with Randomness above 0 will look different (calmer and more marquee‑like).
 - Location‑mode direction polarity (Up/Down/Left/Right on a matrix) is worth an
   eyeball; it is a one‑line sign flip if any axis reads backwards.
+- **Fit To Element** measures the movement axis of the render buffer: pixels‑per‑string for
+  Left/Right, string count for Up/Down. On a mixed‑length prop that is the *longest* string,
+  so shorter strings in the same group will not tile perfectly.
