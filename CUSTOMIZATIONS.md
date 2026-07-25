@@ -74,5 +74,17 @@ If you were running a build from that tree, **the Liquid effect was disabled in 
 
 ## Building
 
-Open `Vixen.sln` in Visual Studio (needs the C++ workload for `Box2D`, `QMLibrary` and
-`LiquidFunWrapper`). Configuration `Debug|x64`; output lands in `Debug\Output\`.
+**Without Visual Studio** (dotnet SDK only):
+
+```powershell
+.\build.ps1
+```
+
+Then run `Debug\Output\Vixen.Application.exe`. This references prebuilt copies of the two C++/CLI
+assemblies from `build-native\` rather than compiling them — see
+[`build-native/README.md`](build-native/README.md) for why that's safe and when to refresh them.
+Everything else is compiled from source.
+
+**With Visual Studio**: open `Vixen.sln` (needs the C++ workload) and build `Debug|x64` as normal —
+the `build-native` path is gated behind the `UsePrebuiltNative` property that only `build.ps1` sets,
+so the Visual Studio build is completely unaffected.
