@@ -17,6 +17,8 @@ namespace VixenModules.App.ColorGradients
 		/// Optional mark positions within the effect, expressed as positions (0-100).
 		/// Each entry includes position and display color.
 		/// </summary>
+		[Browsable(false)]
+		[DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
 		public List<(double Position, Color Color)> MarkPositions { get; set; }
 
 		public ColorGradientEditor(ColorGradient gradient, bool discreteColors, IEnumerable<Color> validDiscreteColors)
