@@ -205,7 +205,7 @@ namespace BaseSequence
 				_PostNaturalEnd(executionGeneration, false);
 			}
 
-			TimingSource = Sequence.GetTiming() ?? _GetDefaultTimingSource();
+			TimingSource = _ResolveTimingSource();
 
 			_LoadMedia();
 
@@ -276,6 +276,11 @@ namespace BaseSequence
 		protected virtual TimeSpan _CoerceEndTime(TimeSpan endTime)
 		{
 			return endTime < Sequence.Length ? endTime : Sequence.Length;
+		}
+
+		protected virtual ITiming _ResolveTimingSource()
+		{
+			return Sequence.GetTiming() ?? _GetDefaultTimingSource();
 		}
 
 		protected virtual ITiming _GetDefaultTimingSource()
@@ -476,7 +481,7 @@ namespace BaseSequence
 			return !_isDisposed && IsRunning && executionGeneration == _executionGeneration;
 		}
 
-		private bool _IsEndOfSequence()
+		protected virtual bool _IsEndOfSequence()
 		{
 			TimeSpan position = TimingSource.Position;
 			if (!_IsTimedSequence) return false;
