@@ -1,6 +1,6 @@
 //============================================================================
 //ZedGraph Class Library - A Flexible Line Graph/Bar Graph Library in C#
-//Copyright © 2004  John Champion
+//Copyright ï¿½ 2004  John Champion
 //
 //This library is free software; you can redistribute it and/or
 //modify it under the terms of the GNU Lesser General Public
@@ -386,9 +386,16 @@ namespace ZedGraph
 				if (_isAntiAlias)
 					g.SmoothingMode = SmoothingMode.HighQuality;
 
+				// Check if the curve has Bezier handle data -- if so, route through
+				// the smooth/filled path which uses BuildPointsArray (which will
+				// inject sampled Bezier points as a dense polyline).
+				bool hasBezier = false;
+				if (curve.Points is PointPairList ppl)
+					hasBezier = ppl.HasBezierData();
+
 				if (curve is StickItem)
 					DrawSticks(g, pane, curve, scaleFactor);
-				else if (this.IsSmooth || this.Fill.IsVisible)
+				else if (hasBezier || this.IsSmooth || this.Fill.IsVisible)
 					DrawSmoothFilledCurve(g, pane, curve, scaleFactor);
 				else
 					DrawCurve(g, pane, curve, scaleFactor);
@@ -571,14 +578,13 @@ namespace ZedGraph
 					}
 				}
 
-				// If it's a smooth curve, go ahead and render the path.  Otherwise, use the
-				// standard drawcurve method just in case there are missing values.
-				if (_isSmooth) {
+				// If it's a smooth curve or has Bezier data, draw using the sampled points array.
+				// Otherwise, use the standard drawcurve method for missing value handling.
+				bool curveHasBezier = points is PointPairList pplCheck && pplCheck.HasBezierData();
+				if (_isSmooth || curveHasBezier) {
 					using (Pen pen = GetPen(pane, scaleFactor)) {
-						// Stroke the curve
+						// For Bezier, draw as polyline (tension=0) through dense sample points
 						g.DrawCurve(pen, arrPoints, 0, count - 2, tension);
-
-						//pen.Dispose();
 					}
 				}
 				else
@@ -1093,6 +1099,13 @@ namespace ZedGraph
 			IPointList points = curve.Points;
 
 			if (this.IsVisible && !this.Color.IsEmpty && points != null) {
+
+				// Check for Bezier handle data -- if present, sample segments densely
+				if (points is PointPairList ppl && ppl.HasBezierData())
+				{
+					return BuildBezierPointsArray(pane, curve, ppl, out arrPoints, out count);
+				}
+
 				int index = 0;
 				float curX,
 				      curY,
@@ -1179,6 +1192,68 @@ namespace ZedGraph
 			else {
 				return false;
 			}
+		}
+
+		/// <summary>
+		/// Builds a dense point array by sampling Bezier segments. For segments where
+		/// either endpoint has <see cref="BezierHandleData"/>, the curve is sampled at
+		/// many intermediate points. Linear segments emit just their endpoints.
+		/// </summary>
+		private bool BuildBezierPointsArray(GraphPane pane, CurveItem curve, PointPairList ppl,
+		                                    out PointF[] arrPoints, out int count)
+		{
+			const int SamplesPerBezierSegment = 30;
+			arrPoints = null;
+			count = 0;
+
+			if (ppl.Count < 2)
+				return false;
+
+			Axis xAxis = curve.GetXAxis(pane);
+			Axis yAxis = curve.GetYAxis(pane);
+
+			// Pre-calculate maximum possible points
+			int maxPoints = (ppl.Count - 1) * SamplesPerBezierSegment + 2;
+			arrPoints = new PointF[maxPoints];
+			int index = 0;
+
+			for (int i = 0; i < ppl.Count - 1; i++)
+			{
+				PointPair p0 = ppl[i];
+				PointPair p1 = ppl[i + 1];
+
+				if (p0.IsInvalid || p1.IsInvalid)
+					continue;
+
+				var sampled = PointPairList.SampleBezierSegment(p0, p1, SamplesPerBezierSegment);
+
+				// For the first segment, include the first sample point.
+				// For subsequent segments, skip the first sample (it duplicates the last point of the previous segment).
+				int startIdx = (i == 0) ? 0 : 1;
+
+				for (int s = startIdx; s < sampled.Count; s++)
+				{
+					float px = xAxis.Scale.Transform(curve.IsOverrideOrdinal, i, sampled[s].X);
+					float py = yAxis.Scale.Transform(curve.IsOverrideOrdinal, i, sampled[s].Y);
+
+					if (px < -1000000 || py < -1000000 || px > 1000000 || py > 1000000)
+						continue;
+
+					arrPoints[index].X = px;
+					arrPoints[index].Y = py;
+					index++;
+				}
+			}
+
+			if (index == 0)
+				return false;
+
+			// Add an extra point at the end for the smoothing algorithm
+			arrPoints[index] = arrPoints[index - 1];
+			index++;
+
+			count = index;
+			return true;
 		}
 
 		/// <summary>

@@ -8,6 +8,7 @@ namespace VixenModules.App.Curves
 {
 	[DataContract]
 	[Serializable]
+	[KnownType(typeof(BezierHandleData))]
 	[TypeConverter(typeof(CurveTypeConverter))]
 	public class Curve
 	{
@@ -31,6 +32,16 @@ namespace VixenModules.App.Curves
 			Points = new PointPairList(curve.Points);
 			LibraryReferenceName = curve.LibraryReferenceName;
 			IsCurrentLibraryCurve = curve.IsCurrentLibraryCurve;
+
+			// Copy Bezier handle data from source points to new points
+			// (PointPair.Clone does this too, but be explicit in case of any edge case)
+			for (int i = 0; i < curve.Points.Count && i < Points.Count; i++)
+			{
+				if (curve.Points[i].Tag is BezierHandleData src)
+				{
+					Points[i].Tag = (BezierHandleData)src.Clone();
+				}
+			}
 		}
 
 		// default Curve constructor makes a ramp with x = y.
@@ -96,6 +107,43 @@ namespace VixenModules.App.Curves
 
 
 		[DataMember] protected string _libraryReferenceName;
+
+		// Bezier handle data is stored on each PointPair's Tag field for in-memory use,
+		// but PointPair.Tag uses ISerializable which DataContractSerializer doesn't go through.
+		// To preserve Bezier handles through save/reload, we snapshot them into a dictionary
+		// (indexed by point position) during serialization, and restore on deserialization.
+		[DataMember] private Dictionary<int, BezierHandleData> _bezierHandlesSnapshot;
+
+		[OnSerializing]
+		internal void OnSerializingBezierHandles(StreamingContext context)
+		{
+			if (Points == null) { _bezierHandlesSnapshot = null; return; }
+
+			Dictionary<int, BezierHandleData> snapshot = null;
+			for (int i = 0; i < Points.Count; i++)
+			{
+				if (Points[i].Tag is BezierHandleData handle)
+				{
+					snapshot ??= new Dictionary<int, BezierHandleData>();
+					snapshot[i] = handle;
+				}
+			}
+			_bezierHandlesSnapshot = snapshot;
+		}
+
+		[OnDeserialized]
+		internal void OnDeserializedBezierHandles(StreamingContext context)
+		{
+			if (_bezierHandlesSnapshot == null || Points == null) return;
+
+			foreach (var kvp in _bezierHandlesSnapshot)
+			{
+				if (kvp.Key >= 0 && kvp.Key < Points.Count)
+				{
+					Points[kvp.Key].Tag = kvp.Value;
+				}
+			}
+		}
 
 		public string LibraryReferenceName
 		{
@@ -172,7 +220,7 @@ namespace VixenModules.App.Curves
 			if (x > 100.0) x = 100.0;
 			if (x < 0.0) x = 0.0;
 
-			double returnValue = Points.InterpolateX(x);
+			double returnValue = Points.BezierInterpolateX(x);
 
 			if (returnValue > 100.0) returnValue = 100.0;
 			if (returnValue < 0.0) returnValue = 0.0;
@@ -225,9 +273,10 @@ namespace VixenModules.App.Curves
 						using (Brush pointBrush = new SolidBrush(Color.FromArgb(255, 136, 136, 136)))
 						{
 							g.FillRectangle(b, new Rectangle(0, 0, size.Width+adjust, size.Height+adjust));
-					
+
+							var sampledPoints = GetSampledPointsForRendering();
 							PointPair lastPoint = null;
-							foreach (var point in Points.ToArray()) //get an array so if the points are modified we can still enumerate.
+							foreach (var point in sampledPoints)
 							{
 								if (lastPoint == null)
 								{
@@ -238,12 +287,15 @@ namespace VixenModules.App.Curves
 								var tPoint = TransformPoint(point, size);
 								var tLastPoint = TransformPoint(lastPoint, size);
 								g.DrawLine(p, tLastPoint, tPoint);
-								if (drawPoints)
-								{
-									g.FillEllipse(pointBrush, tPoint.X - 3, tPoint.Y - 3, 6, 6);
-									g.FillEllipse(pointBrush, tLastPoint.X - 3, tLastPoint.Y - 3, 6, 6);
-								}
 								lastPoint = point;
+							}
+							if (drawPoints)
+							{
+								foreach (var point in Points.ToArray())
+								{
+									var tPoint = TransformPoint(point, size);
+									g.FillEllipse(pointBrush, tPoint.X - 3, tPoint.Y - 3, 6, 6);
+								}
 							}
 						}
 					}
@@ -291,8 +343,9 @@ namespace VixenModules.App.Curves
 								}
 							}
 
+							var sampledPoints = GetSampledPointsForRendering();
 							PointPair lastPoint = null;
-							foreach (var point in Points.ToArray()) //get an array so if the points are modified we can still enumerate.
+							foreach (var point in sampledPoints)
 							{
 								if (lastPoint == null)
 								{
@@ -303,12 +356,15 @@ namespace VixenModules.App.Curves
 								var tPoint = TransformPoint(point, size);
 								var tLastPoint = TransformPoint(lastPoint, size);
 								g.DrawLine(p, tLastPoint, tPoint);
-								if (drawPoints)
-								{
-									g.FillEllipse(pointBrush, tPoint.X - 3, tPoint.Y - 3, 6, 6);
-									g.FillEllipse(pointBrush, tLastPoint.X - 3, tLastPoint.Y - 3, 6, 6);
-								}
 								lastPoint = point;
+							}
+							if (drawPoints)
+							{
+								foreach (var point in Points.ToArray())
+								{
+									var tPoint = TransformPoint(point, size);
+									g.FillEllipse(pointBrush, tPoint.X - 3, tPoint.Y - 3, 6, 6);
+								}
 							}
 						}
 					}
@@ -327,6 +383,26 @@ namespace VixenModules.App.Curves
 			Y = (int)(Y*(bounds.Height/100f));
 			X = (int)(X*((bounds.Width-1)/100f));
 			return new Point(X,Y);
+		}
+
+		/// <summary>
+		/// Returns a list of densely sampled points for rendering, expanding
+		/// Bezier segments into polyline approximations.
+		/// </summary>
+		private PointPair[] GetSampledPointsForRendering()
+		{
+			if (!Points.HasBezierData())
+				return Points.ToArray();
+
+			var result = new PointPairList();
+			for (int i = 0; i < Points.Count - 1; i++)
+			{
+				var sampled = PointPairList.SampleBezierSegment(Points[i], Points[i + 1], 30);
+				int start = (i == 0) ? 0 : 1;
+				for (int s = start; s < sampled.Count; s++)
+					result.Add(sampled[s]);
+			}
+			return result.ToArray();
 		}
 
 		public Bitmap GenerateCurveImage(Size size)
@@ -366,7 +442,35 @@ namespace VixenModules.App.Curves
 
 		protected bool Equals(Curve other)
 		{
-			return Equals(_points, other._points) && Equals(_library, other._library) && string.Equals(_libraryReferenceName, other._libraryReferenceName) && Equals(LibraryReferencedCurve, other.LibraryReferencedCurve) && IsCurrentLibraryCurve == other.IsCurrentLibraryCurve;
+			if (!Equals(_points, other._points)) return false;
+			if (!Equals(_library, other._library)) return false;
+			if (!string.Equals(_libraryReferenceName, other._libraryReferenceName)) return false;
+			if (!Equals(LibraryReferencedCurve, other.LibraryReferencedCurve)) return false;
+			if (IsCurrentLibraryCurve != other.IsCurrentLibraryCurve) return false;
+
+			// Bezier handles live on PointPair.Tag, which is NOT compared by PointPair.Equals.
+			// Without this check, the property grid sees the curves as equal and discards the
+			// modified curve (Bezier data is lost).
+			if (_points != null && other._points != null && _points.Count == other._points.Count)
+			{
+				for (int i = 0; i < _points.Count; i++)
+				{
+					var a = _points[i].Tag as BezierHandleData;
+					var b = other._points[i].Tag as BezierHandleData;
+
+					if (a == null && b == null) continue;
+					if (a == null || b == null) return false;
+
+					if (a.InHandleX != b.InHandleX) return false;
+					if (a.InHandleY != b.InHandleY) return false;
+					if (a.OutHandleX != b.OutHandleX) return false;
+					if (a.OutHandleY != b.OutHandleY) return false;
+					if (a.HasInHandle != b.HasInHandle) return false;
+					if (a.HasOutHandle != b.HasOutHandle) return false;
+				}
+			}
+
+			return true;
 		}
 
 		public override int GetHashCode()
