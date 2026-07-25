@@ -25,6 +25,7 @@
 				<ProjectReference Include="..\..\Effect\Wave\IWaveform\IWaveform.csproj" />
 				<ProjectReference Include="..\..\Effect\Wave\Wave\Wave.csproj" />
 				<ProjectReference Include="..\..\Effect\Whirlpool\Whirl\IWhirl.csproj" />
+				<ProjectReference Include="..\..\Media\Audio\Audio.csproj" />
 				<ProjectReference Include="..\..\Property\Color\Color.csproj" />
 				<ProjectReference Include="..\PolygonEditor\PolygonEditor.csproj" />
 		</ItemGroup>
