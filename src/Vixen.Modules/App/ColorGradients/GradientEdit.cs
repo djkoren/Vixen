@@ -26,6 +26,8 @@ namespace VixenModules.App.ColorGradients
 		/// <summary>
 		/// Optional mark positions (0-100) with colors, drawn as vertical lines on the gradient.
 		/// </summary>
+		[Browsable(false)]
+		[DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
 		public List<(double Position, Color Color)> MarkPositions { get; set; }
 
 		#endregion
