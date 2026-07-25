@@ -44,7 +44,7 @@
 			buttonCancel.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
 			buttonCancel.AutoSize = true;
 			buttonCancel.DialogResult = DialogResult.Cancel;
-			buttonCancel.Location = new Point(399, 270);
+			buttonCancel.Location = new Point(509, 270);
 			buttonCancel.Name = "buttonCancel";
 			buttonCancel.Size = new Size(93, 29);
 			buttonCancel.TabIndex = 5;
@@ -56,7 +56,7 @@
 			buttonOK.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
 			buttonOK.AutoSize = true;
 			buttonOK.DialogResult = DialogResult.OK;
-			buttonOK.Location = new Point(300, 270);
+			buttonOK.Location = new Point(410, 270);
 			buttonOK.Name = "buttonOK";
 			buttonOK.Size = new Size(93, 29);
 			buttonOK.TabIndex = 4;
@@ -73,7 +73,7 @@
 			groupBoxLibrary.Controls.Add(buttonLoadFromLibrary);
 			groupBoxLibrary.Location = new Point(14, 159);
 			groupBoxLibrary.Name = "groupBoxLibrary";
-			groupBoxLibrary.Size = new Size(478, 98);
+			groupBoxLibrary.Size = new Size(588, 98);
 			groupBoxLibrary.TabIndex = 9;
 			groupBoxLibrary.TabStop = false;
 			groupBoxLibrary.Text = "Library";
@@ -143,9 +143,9 @@
 			gradientEditPanel.ForeColor = Color.FromArgb(235, 235, 235);
 			gradientEditPanel.Location = new Point(14, 14);
 			gradientEditPanel.Margin = new Padding(4, 3, 4, 3);
-			gradientEditPanel.MinimumSize = new Size(416, 138);
+			gradientEditPanel.MinimumSize = new Size(526, 138);
 			gradientEditPanel.Name = "gradientEditPanel";
-			gradientEditPanel.Size = new Size(478, 138);
+			gradientEditPanel.Size = new Size(588, 138);
 			gradientEditPanel.TabIndex = 0;
 			// 
 			// ColorGradientEditor
@@ -156,14 +156,14 @@
 			AutoSize = true;
 			BackColor = Color.FromArgb(68, 68, 68);
 			CancelButton = buttonCancel;
-			ClientSize = new Size(506, 314);
+			ClientSize = new Size(616, 314);
 			Controls.Add(gradientEditPanel);
 			Controls.Add(groupBoxLibrary);
 			Controls.Add(buttonCancel);
 			Controls.Add(buttonOK);
 			FormBorderStyle = FormBorderStyle.FixedDialog;
 			KeyPreview = true;
-			MinimumSize = new Size(522, 352);
+			MinimumSize = new Size(632, 352);
 			Name = "ColorGradientEditor";
 			StartPosition = FormStartPosition.CenterParent;
 			Text = "Color Gradient Editor";
