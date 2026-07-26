@@ -35,6 +35,14 @@ namespace VixenModules.Effect.Marquee
 			// into play once at least one ripple is asked for.
 			Ripples = 0;
 			RippleSpeed = 40;
+			// No animation, and a flat 50 curve -- the assembled position -- so turning one on does not
+			// immediately move anything until the curve is shaped.
+			Animation = MarqueeAnimation.None;
+			AnimationCurve = new Curve(new PointPairList(new[] { 0.0, 100.0 }, new[] { 50.0, 50.0 }));
+			AnimationFrom = MarqueeAnimationFrom.Left;
+			// No blown bulbs. The seed only matters once there are some.
+			BadBulbs = 0;
+			BadBulbSeed = 1;
 			Orientation = StringOrientation.Horizontal;
 		}
 
@@ -87,6 +95,32 @@ namespace VixenModules.Effect.Marquee
 		[DataMember]
 		public int RippleSpeed { get; set; }
 
+		/// <summary>Which animation, if any, brings the pattern on and off.</summary>
+		[DataMember]
+		public MarqueeAnimation Animation { get; set; }
+
+		/// <summary>
+		/// Drives <see cref="Animation"/> over the effect's duration. 50 is fully assembled; below 50 the
+		/// pattern is arriving and above 50 it is leaving by the opposite route.
+		/// </summary>
+		[DataMember]
+		public Curve AnimationCurve { get; set; }
+
+		/// <summary>Which end of the movement axis the animation arrives from.</summary>
+		[DataMember]
+		public MarqueeAnimationFrom AnimationFrom { get; set; }
+
+		/// <summary>How many LEDs on the element are blown and never light. 0 = none.</summary>
+		[DataMember]
+		public int BadBulbs { get; set; }
+
+		/// <summary>
+		/// Picks which LEDs are blown. The same seed always gives the same set, so the arrangement does
+		/// not change when other properties are edited; change it to shuffle to a different one.
+		/// </summary>
+		[DataMember]
+		public int BadBulbSeed { get; set; }
+
 		[DataMember]
 		public StringOrientation Orientation { get; set; }
 
@@ -112,6 +146,25 @@ namespace VixenModules.Effect.Marquee
 			if (Ripples < 0)
 			{
 				Ripples = 0;
+			}
+
+			// Sequences saved before the animation existed deserialize with no curve at all. A flat 50 is
+			// the assembled position, so they load looking exactly as they did.
+			if (AnimationCurve == null)
+			{
+				AnimationCurve = new Curve(new PointPairList(new[] { 0.0, 100.0 }, new[] { 50.0, 50.0 }));
+			}
+
+			if (BadBulbs < 0)
+			{
+				BadBulbs = 0;
+			}
+
+			// Those sequences also deserialize a zero seed, which would make every one of them pick the
+			// same arrangement the moment bad bulbs were turned on.
+			if (BadBulbSeed == 0)
+			{
+				BadBulbSeed = 1;
 			}
 
 			if (LevelCurve == null)
@@ -142,6 +195,11 @@ namespace VixenModules.Effect.Marquee
 				Randomness = Randomness,
 				Ripples = Ripples,
 				RippleSpeed = RippleSpeed,
+				Animation = Animation,
+				AnimationCurve = new Curve(AnimationCurve),
+				AnimationFrom = AnimationFrom,
+				BadBulbs = BadBulbs,
+				BadBulbSeed = BadBulbSeed,
 				Orientation = Orientation,
 			};
 			return result;
