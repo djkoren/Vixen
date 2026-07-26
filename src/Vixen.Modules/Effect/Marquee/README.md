@@ -21,13 +21,22 @@ It is a pixel effect (`PixelEffectBase`) and works in both **String** and
 | **Advance By** | How many LEDs the pattern moves at a time, and so how many light and go out together. The element is divided into fixed steps of this many LEDs; every LED in a step always shows the same brightness and the whole step switches as one — `2` moves and lights two at a time, `5` does five at a time. `1` = the pattern slides one LED at a time (classic marquee). Above `1`, **Lights On** and **Lights Off** are rounded to a whole number of steps so every group stays in step with the others. Auto‑capped at **Lights On** and snaps down if you lower Lights On. *(Stored as `FadeGroup` for backwards compatibility.)* |
 | **Speed** | A curve mapping to movement rate. Mapped **exponentially** (≈0.02 … 120 LEDs/sec) so most of the range is slow, fine control; a flat 0 stops it. |
 | **Randomness** | Slider 0–100. Shifts each lit **group as a whole** early or late by a fixed random amount; the LEDs inside a group never move relative to each other. The shift is *static*, so the pattern ends up unevenly spaced but still slides as one rigid piece. Colour is **not** jittered, only position. |
-| **Ripples** | How many ripples run along the element at once (`0` = off). A ripple shoves every group it reaches forward by one **Advance By** step; the group then holds until the next ripple arrives. `1` is a single surge sweeping end to end, `4` is four chasing each other. Because it is a count *across the element*, the look is the same on a 50‑LED prop and a 500‑LED one. |
-| **Ripple Speed** | Slider 0–100, ≈0.05 … 6 ripples/sec, exponentially mapped. **Independent of Speed.** Hidden until Ripples is turned up. |
+| **Ripples** | Slider 0–20. How many ripples run along the element at once (`0` = off). A ripple carries every group it reaches forward by one **Advance By** step; the group then holds until the next ripple arrives. `1` is a single surge sweeping end to end, `4` is four chasing each other. Because it is a count *across the element*, the look is the same on a 50‑LED prop and a 500‑LED one. |
+| **Ripple Speed** | Slider 0–100, ≈0.05 … 6 ripples/sec, exponentially mapped. **Independent of Speed.** Slower is genuinely smoother, not just slower: the group eases across its step over a fixed *fraction* of the cycle, so a slow ripple glides and a fast one snaps. Hidden until Ripples is turned up. |
 
 The ripples are real movement, not just a wobble: each one carries the pattern forward a step. Set
 **Speed to 0** and the ripples are the only motion — which is the point, because a group can then sit
 genuinely still between shoves instead of gliding through the pause. Leave Speed above 0 and you get a
 smooth glide with the stepping laid over it.
+
+> ⚠️ **The Fade curve decides whether any of this is visible.** A group flows across its step in
+> fractions of an LED, but which LEDs are *lit* can only ever change a whole LED at a time. What turns
+> sub‑LED movement into something the eye can see is the Fade curve ramping an LED up as the group
+> arrives and down as it leaves. With the default **flat 100** curve (hard bulbs) an LED is only ever
+> fully on or fully off, so every ripple lands as a hard one‑LED jog no matter how slowly it flows.
+> Give the Fade curve any slope — a curve peaking in the middle is the classic choice — and the same
+> ripple reads as a smooth crossfade. This applies to plain Speed movement too; it is not specific to
+> ripples.
 
 Both Randomness and the ripples need a gap to move in — with **Lights Off = 0** there is nowhere to go
 and neither does anything. They share one budget (see below); the ripples are served first, so turning
@@ -78,9 +87,18 @@ cannot hold still — it is never not moving, so it can only ever look like drif
 walking.
 
 ```
-placeInQueue = mod(g, rippleGroups) / rippleGroups        // where g sits in the queue, 0..1
-GroupRipple(g) = rippleStep · (floor(ripplePhase − placeInQueue) − ripplePhase + 1)
+placeInQueue   = mod(g, rippleGroups) / rippleGroups      // where g sits in the queue, 0..1
+ripplesPassed  = ripplePhase − placeInQueue
+rise           = min(1, frac(ripplesPassed) / RiseFraction)
+eased          = rise²·(3 − 2·rise)                       // smoothstep: starts and ends at rest
+GroupRipple(g) = rippleStep · (floor(ripplesPassed) + eased − ripplePhase + 1)
 ```
+
+The `eased` term is what makes it flow rather than teleport — without it the group covers its whole
+step in a single frame. Because the rise is a *fraction* of the cycle (0.6) rather than a fixed time,
+a slow ripple eases over a long stretch and a fast one snaps, which is why Ripple Speed reads as a
+smoothness control as much as a speed one. `floor + eased` is still monotonic and still gains exactly
+1 per cycle, so the bound below is unchanged.
 
 `floor(...)` counts how many ripples have reached this group, so on its own it climbs forever. The
 climbing part is **identical for every group** and is genuine forward movement, so `UpdatePhase` puts
