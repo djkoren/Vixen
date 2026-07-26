@@ -43,6 +43,13 @@ namespace VixenModules.Effect.Marquee
 		/// </summary>
 		private const double MaxOffsetGapFraction = 0.5;
 
+		/// <summary>
+		/// Fraction of a ripple cycle a group spends easing forward, spending the rest of it at rest.
+		/// Below 1 there is a real pause between shoves; at 1 the motion never stops. Because it is a
+		/// fraction of the cycle rather than a fixed time, a slow ripple glides and a fast one snaps.
+		/// </summary>
+		private const double RippleRiseFraction = 0.6;
+
 		/// <summary>Slowest ripple rate in cycles per second.</summary>
 		private const double MinRippleHz = 0.05;
 
@@ -320,7 +327,9 @@ namespace VixenModules.Effect.Marquee
 		[Value]
 		[ProviderCategory(@"Config", 1)]
 		[ProviderDisplayName(@"Ripples")]
-		[ProviderDescription(@"Ripples running along the element.  Each one shoves a group forward a step.")]
+		[ProviderDescription(@"Ripples running along the element.  Each one carries a group forward a step.")]
+		[PropertyEditor("SliderEditor")]
+		[NumberRange(0, 20, 1)]
 		[PropertyOrder(7)]
 		public int Ripples
 		{
@@ -709,10 +718,11 @@ namespace VixenModules.Effect.Marquee
 		/// Ripple displacement for a whole lit group, in LED units.
 		/// </summary>
 		/// <remarks>
-		/// A group is either waiting for the next ripple or has already been shoved by it, and this is
-		/// which of the two - a staircase, not a wave. That is the whole point: a group holds position,
-		/// gets shoved forward a step, then holds again until the next ripple reaches it. A smooth wave
-		/// cannot do that, because it is never not moving.
+		/// A group is either waiting for the next ripple, being carried by it, or already done with it -
+		/// a staircase with eased risers rather than a wave. That is the whole point: a group holds
+		/// position, flows forward a step, then holds again until the next ripple reaches it. A smooth
+		/// wave cannot do that, because it is never not moving; a bare <c>floor</c> cannot either,
+		/// because it teleports.
 		///
 		/// The staircase counts ripples, so on its own it would climb forever. The part that climbs is
 		/// identical for every group and is real forward movement, so <see cref="UpdatePhase"/> puts it in
@@ -730,7 +740,16 @@ namespace VixenModules.Effect.Marquee
 			}
 
 			double placeInQueue = Mod(group, _rippleGroups) / _rippleGroups;
-			return _rippleStep * (Math.Floor(_ripplePhase - placeInQueue) - _ripplePhase + 1.0);
+			double ripplesPassed = _ripplePhase - placeInQueue;
+			double whole = Math.Floor(ripplesPassed);
+
+			// Ease across the shove rather than teleporting: smoothstep over the opening stretch of the
+			// cycle, then hold for the rest.  The group leaves and arrives at a standstill, so there is no
+			// jolt at either end of the move.
+			double rise = Math.Min(1.0, (ripplesPassed - whole) / RippleRiseFraction);
+			double eased = rise * rise * (3.0 - 2.0 * rise);
+
+			return _rippleStep * (whole + eased - _ripplePhase + 1.0);
 		}
 
 		/// <summary>
