@@ -9,6 +9,42 @@ incandescent fade in and out.
 It is a pixel effect (`PixelEffectBase`) and works in both **String** and
 **Location** (matrix / megatree) target modes.
 
+## Defaults
+
+A freshly dropped Marquee starts as the plainest readable pattern, meant to be widened from rather
+than trimmed down:
+
+| | |
+| --- | --- |
+| Orientation | Horizontal |
+| Lights On / Lights Off | `1` / `3` |
+| Advance By | `1` |
+| Fade | flat 100 (hard bulbs) |
+| Speed | flat 50 |
+| Fit To Element, Randomness, Ripples | off |
+
+## Recipes
+
+**Smooth shuffling crawl** (the one to reach for first)
+
+| | |
+| --- | --- |
+| Fade | **a rounded V — up to 100 in the middle, 0 at both ends** |
+| Speed | `0` (the ripples do the moving) |
+| Ripples | `2` |
+| Ripple Speed | `40`–`55` |
+| Lights On / Off | `1` / `5` |
+
+The Fade curve is the part that is easy to miss and the part that matters most — see the warning
+under Config. Flat 100 will make this land as hard one‑LED jogs no matter what else is set.
+
+**Classic marquee chase** — leave Fade flat 100, Ripples `0`, and drive it with Speed alone.
+
+**Organic / alive** — the smooth crawl above plus Randomness `20`–`40` for irregular spacing on top
+of the shuffle.
+
+**Even spacing on an odd‑length prop** — turn on Fit To Element; Lights Off becomes the minimum gap.
+
 ## Controls
 
 ### Config
@@ -167,9 +203,11 @@ LEDs), so the string renderer always computes one line and reuses it across the 
   which layered a built‑in fade‑in *and* fade‑out on top of whatever curve you drew — a rising line
   came out symmetrical instead of ramping up and snapping off. It is now read straight across an
   LED's journey through the group, so the curve is the whole story.
-- The default **Fade** curve is still a rising line, which under the new reading means *ramp up,
-  snap off*. A curve peaking in the middle is the classic incandescent look if that is wanted as
-  the default instead.
+- The default **Fade** curve is flat 100 — deliberately hard bulbs, so a new effect reads as a plain
+  marquee. The cost is that sub‑LED movement is invisible until the curve is given a slope, which
+  catches people out (see the warning under Config). A rounded V is the setting that makes the
+  ripples look the way they are meant to; making it the default is a one‑line change in
+  `MarqueeData`'s constructor if the hard‑bulb start ever stops being worth it.
 - **Randomness** used to be a per‑pixel offset seeded from both axes, which read as noise
   rather than as a marquee. It is now per group and bounded by the gap. Existing sequences
   with Randomness above 0 will look different (calmer and more marquee‑like).
