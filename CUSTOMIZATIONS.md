@@ -32,7 +32,11 @@ git fetch upstream --tags && git checkout -b main-NNNN DevBuild-NNNN && git cher
 
 **Bezier curve handles** (`src/Vixen.Modules/App/Curves/`) — cubic-bezier control handles in the
 curve editor: a new `BezierHandleData` model, handle hit-testing and dragging in the ZedGraph
-`Line`/`PointPairList` code, plus curve evaluation and serialization changes.
+`Line`/`PointPairList` code, plus curve evaluation and serialization changes. Right-clicking a point
+adds or removes its handles, which is now spelled out in the dialog's instruction lines. Removing the
+last handle on a curve used to leave the handles on screen until some later event forced a redraw —
+the "nothing happened" was a missing invalidate on an early-return path, now repainted
+unconditionally.
 
 **Curve and gradient editor UX** (`src/Vixen.Modules/App/ColorGradients/`,
 `src/Vixen.Modules/Editor/EffectEditor/`) — audio waveform backdrop and mark overlays in the curve
@@ -77,12 +81,24 @@ lights, 1 just before it goes dark — with nothing layered on top, so a rising 
 off and a curve peaking in the middle fades both ways. Everything is laid out on the step grid, which
 is what keeps every group at the same point in the fade (otherwise a chase appears to run *through*
 the pattern) and keeps exactly `Lights On` LEDs lit at every instant. **Randomness** displaces whole
-groups rather than individual LEDs, bounded by the gap so groups can never merge. **Ripples** (new, off by
-default, with just a count and a speed) send pulses along the groups: each shoves a group forward one
-step, and the group then holds until the next ripple reaches it. That stepping is real movement, so
-with Speed at 0 the ripples are the only motion and a group genuinely sits still between shoves. The
-two share one gap budget that guarantees a dark LED always survives between groups. **Fit To Element** (new, off by default) spreads the
-pattern so a whole number of groups spans the element, giving even spacing and a seamless wrap.
+groups rather than individual LEDs, bounded by the gap so groups can never merge. **Fit To Element**
+(new, off by default) spreads the pattern so a whole number of groups spans the element, giving even
+spacing and a seamless wrap.
+
+**Ripples** (new, off by default, just a count and a speed) send pulses along the groups: each one
+carries a group forward one step, easing across it, and the group then holds until the next ripple
+reaches it. That stepping is real movement, so with Speed at 0 the ripples are the only motion and a
+group genuinely sits still between shoves rather than gliding through the pause. Randomness and the
+ripples share one gap budget that guarantees a dark LED always survives between groups.
+
+⚠️ **The Fade curve decides whether smooth movement is visible at all.** Which LEDs are lit can only
+change a whole LED at a time, so sub-LED motion only reaches the prop as one LED ramping up while
+another ramps down — and that ramp is the Fade curve. Under the default flat 100 (hard bulbs) every
+ripple lands as a hard one-LED jog however smoothly it flows. A rounded V is what makes the ripples
+read as designed. This is true of plain Speed movement too and is not specific to ripples.
+
+A new Marquee defaults to Horizontal, Lights On 1, Lights Off 3, Advance By 1 and a flat 100 Fade.
+See the module README for those and for tested recipes.
 
 These are behavior changes: a saved sequence with `Advance By > 1` or `Randomness > 0` will look
 different from how it looked before, any sequence whose Fade curve is not symmetrical will render
