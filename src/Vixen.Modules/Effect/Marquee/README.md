@@ -45,6 +45,14 @@ of the shuffle.
 
 **Even spacing on an odd‑length prop** — turn on Fit To Element; Lights Off becomes the minimum gap.
 
+**Animate on, hold, animate off** — Animation `Slide`, and an Animation Curve that ramps `0 → 50` over
+the first stretch, holds flat at `50` through the middle, then ramps `50 → 100` at the end. The
+pattern slides in, runs normally, and slides out the far side.
+
+**A sign warming up** — Animation `Dissolve` with the curve ramping `0 → 50`, plus **Bad Bulbs** at 3–6.
+Groups flicker on in a scattered order and a few never do.
+
+
 ## Controls
 
 ### Config
@@ -59,6 +67,8 @@ of the shuffle.
 | **Randomness** | Slider 0–100. Shifts each lit **group as a whole** early or late by a fixed random amount; the LEDs inside a group never move relative to each other. The shift is *static*, so the pattern ends up unevenly spaced but still slides as one rigid piece. Colour is **not** jittered, only position. |
 | **Ripples** | Slider 0–20. How many ripples run along the element at once (`0` = off). A ripple carries every group it reaches forward by one **Advance By** step; the group then holds until the next ripple arrives. `1` is a single surge sweeping end to end, `4` is four chasing each other. Because it is a count *across the element*, the look is the same on a 50‑LED prop and a 500‑LED one. |
 | **Ripple Speed** | Slider 0–100, ≈0.05 … 6 ripples/sec, exponentially mapped. **Independent of Speed.** Slower is genuinely smoother, not just slower: the group eases across its step over a fixed *fraction* of the cycle, so a slow ripple glides and a fast one snaps. Hidden until Ripples is turned up. |
+| **Bad Bulbs** | How many LEDs on the element are blown and never light, like an old sign with a few dead bulbs. `0` = none. They are picked once per render, so a dud stays dud for the whole effect and shows through every animation. |
+| **Bad Bulb Seed** | Which bulbs are blown. The same seed always picks the same ones, so editing anything else never reshuffles them; change it to shuffle to an arrangement you prefer. Hidden until Bad Bulbs is above 0. |
 
 The ripples are real movement, not just a wobble: each one carries the pattern forward a step. Set
 **Speed to 0** and the ripples are the only motion — which is the point, because a group can then sit
@@ -77,6 +87,44 @@ smooth glide with the stepping laid over it.
 Both Randomness and the ripples need a gap to move in — with **Lights Off = 0** there is nowhere to go
 and neither does anything. They share one budget (see below); the ripples are served first, so turning
 them on leaves Randomness a little less room.
+
+### Animation
+
+Animates the pattern on and off from inside the effect. A layered overlay can only multiply
+brightness, so it can never do anything *structural* — it has no idea where the groups are. Anything
+that moves or reveals groups individually has to live here.
+
+| Property | Meaning |
+| --- | --- |
+| **Animation** | `None` (default), `Slide`, `Dissolve`, `Stack`, `Scale`. |
+| **Animation Curve** | Drives the animation over the effect's duration. **50 is fully assembled** — see below. |
+| **Animation From** | Which end of the movement axis it arrives from: `Left`, `Right`, `Center Out`, `Ends In`. It leaves by the far end. Only shown for Slide and Stack; Dissolve and Scale have no axis. Named for a horizontal movement axis — on a vertical one they read as top and bottom. |
+
+**The curve is the whole animation.** Not a duration, not a slider — so it can animate on over the
+first beat, sit still, and leave on the last, any shape, any number of times.
+
+```
+curve   0 ---------- 50 ---------- 100
+     fully gone    assembled    fully gone
+     (arriving)                 (the other way)
+
+0 -> 50        animate on
+50 -> 100      animate off
+0 -> 100       on, then straight off the far side
+50 ->100-> 50  out and back
+flat 50        no animation at all
+```
+
+**At exactly 50 every mode renders identically to `None`.** That is enforced by a test, not just
+intended: the neutral point has to be genuinely neutral or picking an animation would nudge the
+pattern before you had asked it to do anything.
+
+| Mode | Below 50 | Above 50 |
+| --- | --- | --- |
+| **Slide** | The whole block travels in from the chosen end. All the groups move — this is not a wipe; nothing is revealed in place. | Keeps going and exits the opposite end. `Center Out` / `Ends In` split it into two halves that part and meet in the middle. |
+| **Dissolve** | Groups appear in a scattered order, each fading up as its turn arrives. Whole **groups**, never individual LEDs. | Leaves in a *different* scattered order, so an out is not the in retraced. |
+| **Stack** | Groups land one at a time from the chosen end and pile up until full. Whatever has landed **keeps running the main effect** — scroll, ripples, fade and all — so the pattern comes alive as it fills. | Unstacks from the other end. |
+| **Scale** | Each group narrows toward its own centre, so the edges die first. | A hole opens at each group's centre and eats outward, so the middle dies first. Both extremes reach dark by opposite routes. |
 
 ### Color
 | Property | Meaning |
@@ -187,11 +235,39 @@ There is intentionally **no supersampling** — a flat Fade curve therefore snap
 The pattern varies only along the movement axis (randomness moves whole groups, not individual
 LEDs), so the string renderer always computes one line and reuses it across the perpendicular axis.
 
+### Where each animation hooks in
+
+Deliberately four different layers, chosen so the group maths and the bounds it relies on stay intact
+wherever possible:
+
+- **Slide** moves the *sample coordinate*, not the groups: LED `s` reads the pattern at `s − travel`,
+  and reads outside `[0, axisLength)` are dark. That windowing is the whole trick — the pattern is
+  infinite and periodic, so translating the groups themselves would displace it by whole periods and
+  look like nothing had happened. `GroupStart` and `TryFindGroup` are untouched.
+- **Dissolve** is a per-group brightness gate on `Hash01(group)`. Deliberately *not* the Dissolve
+  effect's approach: that one reshuffles from a time-seeded generator on every pre-render, so editing
+  any unrelated property silently reorders it. `Hash01` is stable across frames *and* re-renders.
+- **Stack** is a per-group arrival gate with exactly one group in transit, which keeps it to a single
+  interval test rather than a widened group search.
+- **Scale** gates on `local`, the position within the group, measuring coverage against the part of the
+  bank *inside* the group. That last part matters: a scrolling pattern puts banks at fractional offsets
+  so one can straddle the group's edge, and dividing by the full bank width leaves the protruding part
+  lit even when the hole covers the whole group.
+
+Mid-animation the no-merge guarantee is legitimately suspended — `Center Out` collapsing to the middle
+is groups overlapping on purpose. It holds at the neutral point, which is what the tests assert.
+
+**Bad bulbs** are a `bool[]` mask built once per render by a seeded `Random`, giving exactly the count
+asked for rather than approximately it. Note this is the one thing that varies across the axis
+*perpendicular* to the movement, so it cannot come out of the shared line — the single-line fast path
+is kept when there are no duds and skipped when there are, otherwise a matrix would lose whole rows
+instead of single bulbs.
+
 ## Files
 - `Marquee.cs` — effect logic (properties + rendering).
 - `MarqueeData.cs` — persisted settings (`[DataContract]`).
 - `MarqueeDescriptor.cs` — module descriptor (`TypeId 9DE5A327‑AF69‑4472‑B8C9‑704B03A6AA43`, group Pixel).
-- `MarqueeColorMode.cs`, `MarqueeDirection.cs` — enums.
+- `MarqueeColorMode.cs`, `MarqueeDirection.cs`, `MarqueeAnimation.cs` — enums.
 - `Images/EffectImage.png` — 64×64 toolbox icon.
 - Registered in `Vixen.sln` (project GUID `477703A1‑64AC‑4741‑AB44‑481EC4EFF0CF`).
 
@@ -216,6 +292,12 @@ LEDs), so the string renderer always computes one line and reuses it across the 
   The staircase does, and it needs two controls instead of three.
 - The ripple travels up the group index. If it reads the wrong way round on a prop it is a sign flip
   on the `placeInQueue` term in `GroupRipple()`.
+- **Stack** orders groups by where they sit on the element, so with Speed above 0 a group can drift
+  across the fill threshold while the animation is mid-flight and pop in or out. It is exact at Speed 0,
+  which is the natural way to use a stack. Ordering by group identity (`g mod N`) instead would be
+  stable per group but would put one discontinuity somewhere in the chain.
+- **Animation From**'s names suit a horizontal movement axis; on a vertical Direction they read as top
+  and bottom. Renaming to Start/End would be accurate for both but less obvious for the common case.
 - Location‑mode direction polarity (Up/Down/Left/Right on a matrix) is worth an
   eyeball; it is a one‑line sign flip if any axis reads backwards.
 - **Fit To Element** measures the movement axis of the render buffer: pixels‑per‑string for

@@ -97,8 +97,23 @@ another ramps down — and that ramp is the Fade curve. Under the default flat 1
 ripple lands as a hard one-LED jog however smoothly it flows. A rounded V is what makes the ripples
 read as designed. This is true of plain Speed movement too and is not specific to ripples.
 
-A new Marquee defaults to Horizontal, Lights On 1, Lights Off 3, Advance By 1 and a flat 100 Fade.
-See the module README for those and for tested recipes.
+An **Animation** group (new, `None` by default) animates the pattern on and off from inside the effect,
+which a layered overlay cannot do — an overlay only multiplies brightness and has no idea where the
+groups are. Four modes: `Slide` (the block travels on and off; all the groups move, nothing is revealed
+in place), `Dissolve` (whole groups in a scattered order), `Stack` (groups land one at a time and
+whatever has landed keeps running the effect) and `Scale` (each group narrows from its edges below 50,
+hollows from its centre above 50). One curve drives it, with **50 meaning fully assembled**: below 50 is
+arriving, above 50 is leaving by the opposite route, so a single animator covers both and can do it any
+shape, anywhere in the effect. At exactly 50 every mode is byte-identical to `None`, which is enforced
+by test rather than merely intended.
+
+**Bad Bulbs** (new, 0 by default) blows a given number of LEDs on the element so they never light, like
+an old sign. A seed picks which — no other Vixen effect exposes one, and it is deliberate: it stops the
+arrangement silently reshuffling every time an unrelated property is edited, which is the trap both
+Dissolve and Lightning have.
+
+A new Marquee defaults to Horizontal, Lights On 1, Lights Off 3, Advance By 1 and a flat 100 Fade, with
+Animation and Bad Bulbs off. See the module README for those and for tested recipes.
 
 These are behavior changes: a saved sequence with `Advance By > 1` or `Randomness > 0` will look
 different from how it looked before, any sequence whose Fade curve is not symmetrical will render

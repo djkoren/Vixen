@@ -50,6 +50,19 @@ namespace VixenModules.Effect.Marquee
 		/// </summary>
 		private const double RippleRiseFraction = 0.6;
 
+		/// <summary>
+		/// How much of the dissolve a group spends crossing between dark and lit. Above zero so groups fade
+		/// across rather than popping on.
+		/// </summary>
+		private const double DissolveRampWidth = 0.25;
+
+		/// <summary>
+		/// Animation gate below which a pixel is treated as off. Rounding leaves the fully-closed cases
+		/// sitting a hair above zero rather than on it, and without a floor that emits a pixel that is
+		/// black anyway - so a fully animated-out pattern would never quite be empty.
+		/// </summary>
+		private const double MinVisibleGate = 1e-4;
+
 		/// <summary>Slowest ripple rate in cycles per second.</summary>
 		private const double MinRippleHz = 0.05;
 
@@ -116,6 +129,24 @@ namespace VixenModules.Effect.Marquee
 
 		/// <summary>Scroll position contributed by the speed curve alone, before the ripples add theirs.</summary>
 		private double _scrollPhase;
+
+		/// <summary>
+		/// Where the animation curve sits at the frame being rendered, remapped so 0 is fully assembled:
+		/// -1 is completely gone the way it arrives from, +1 completely gone the opposite way.
+		/// </summary>
+		private double _animSigned;
+
+		/// <summary>How far from assembled, 0 (fully on) to 1 (fully gone), whichever way.</summary>
+		private double _animAmount;
+
+		/// <summary>True when an animation is selected and the curve is actually away from 50.</summary>
+		private bool _animActive;
+
+		/// <summary>
+		/// Which LEDs are blown, indexed <c>y * BufferWi + x</c>. Null when there are none, which is also
+		/// the flag for keeping the single-line render fast path.
+		/// </summary>
+		private bool[] _badBulbs;
 
 		private bool _moveAlongX;
 		private double _dirSign;
@@ -367,12 +398,118 @@ namespace VixenModules.Effect.Marquee
 			}
 		}
 
+		/// <summary>
+		/// Gets or sets how many LEDs on the element are blown and never light, like an old marquee sign
+		/// with a few dead bulbs. 0 = none.
+		/// </summary>
+		[Value]
+		[ProviderCategory(@"Config", 1)]
+		[ProviderDisplayName(@"Bad Bulbs")]
+		[ProviderDescription(@"How many LEDs are blown and never light.")]
+		[PropertyOrder(9)]
+		public int BadBulbs
+		{
+			get { return _data.BadBulbs; }
+			set
+			{
+				if (value < 0) value = 0;
+				_data.BadBulbs = value;
+				UpdateBadBulbAttributes();
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
+		/// <summary>
+		/// Gets or sets which LEDs are blown. The same seed always picks the same ones, so editing other
+		/// properties never reshuffles them; change it to shuffle to a different arrangement.
+		/// </summary>
+		[Value]
+		[ProviderCategory(@"Config", 1)]
+		[ProviderDisplayName(@"Bad Bulb Seed")]
+		[ProviderDescription(@"Change to shuffle which bulbs are blown.")]
+		[PropertyOrder(10)]
+		public int BadBulbSeed
+		{
+			get { return _data.BadBulbSeed; }
+			set
+			{
+				_data.BadBulbSeed = value;
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
+		#endregion
+
+		#region Animation properties
+
+		/// <summary>
+		/// Gets or sets which animation brings the pattern on and off.
+		/// </summary>
+		[Value]
+		[ProviderCategory(@"Animation", 2)]
+		[ProviderDisplayName(@"Animation")]
+		[ProviderDescription(@"How the pattern arrives and leaves.")]
+		[PropertyOrder(0)]
+		public MarqueeAnimation Animation
+		{
+			get { return _data.Animation; }
+			set
+			{
+				_data.Animation = value;
+				UpdateAnimationAttributes();
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
+		/// <summary>
+		/// Gets or sets the curve driving the animation. 50 is fully assembled; below 50 the pattern is
+		/// arriving and above 50 it is leaving by the opposite route, so one curve does both.
+		/// </summary>
+		[Value]
+		[ProviderCategory(@"Animation", 2)]
+		[ProviderDisplayName(@"Animation Curve")]
+		[ProviderDescription(@"50 is fully on.  Below is arriving, above is leaving the other way.")]
+		[PropertyOrder(1)]
+		public Curve AnimationCurve
+		{
+			get { return _data.AnimationCurve; }
+			set
+			{
+				_data.AnimationCurve = value;
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
+		/// <summary>
+		/// Gets or sets which end of the movement axis the animation arrives from. It leaves by the far
+		/// end.
+		/// </summary>
+		[Value]
+		[ProviderCategory(@"Animation", 2)]
+		[ProviderDisplayName(@"Animation From")]
+		[ProviderDescription(@"Which end it arrives from.  It leaves by the other.")]
+		[PropertyOrder(2)]
+		public MarqueeAnimationFrom AnimationFrom
+		{
+			get { return _data.AnimationFrom; }
+			set
+			{
+				_data.AnimationFrom = value;
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
 		#endregion
 
 		#region Color properties
 
 		[Value]
-		[ProviderCategory(@"Color", 2)]
+		[ProviderCategory(@"Color", 3)]
 		[ProviderDisplayName(@"Color Mode")]
 		[ProviderDescription(@"How the colors are laid out across the marquee.")]
 		[PropertyOrder(0)]
@@ -388,7 +525,7 @@ namespace VixenModules.Effect.Marquee
 		}
 
 		[Value]
-		[ProviderCategory(@"Color", 2)]
+		[ProviderCategory(@"Color", 3)]
 		[ProviderDisplayName(@"ColorGradients")]
 		[ProviderDescription(@"The color palette.  Groups cycle through it.")]
 		[PropertyOrder(1)]
@@ -408,7 +545,7 @@ namespace VixenModules.Effect.Marquee
 		#region Brightness properties
 
 		[Value]
-		[ProviderCategory(@"Brightness", 3)]
+		[ProviderCategory(@"Brightness", 4)]
 		[ProviderDisplayName(@"Fade")]
 		[ProviderDescription(@"Brightness of an LED from the moment it lights to the moment it goes dark.  Flat = no fade.")]
 		[PropertyOrder(0)]
@@ -424,7 +561,7 @@ namespace VixenModules.Effect.Marquee
 		}
 
 		[Value]
-		[ProviderCategory(@"Brightness", 3)]
+		[ProviderCategory(@"Brightness", 4)]
 		[ProviderDisplayName(@"Brightness")]
 		[ProviderDescription(@"Overall brightness over the effect.")]
 		[PropertyOrder(1)]
@@ -541,6 +678,8 @@ namespace VixenModules.Effect.Marquee
 			_jitterAmount = Math.Min(randomWeight * randomBudget / randomGapCost,
 				randomWeight * gap * MaxOffsetGapFraction);
 
+			BuildBadBulbs();
+
 			// Pre-sample the fade curve into a lookup table.
 			_lutSize = 257;
 			_fadeLut = new double[_lutSize];
@@ -559,6 +698,54 @@ namespace VixenModules.Effect.Marquee
 		protected override void CleanUpRender()
 		{
 			_fadeLut = null;
+			_badBulbs = null;
+		}
+
+		/// <summary>
+		/// Picks the blown bulbs for this render, or leaves the mask null when there are none.
+		/// </summary>
+		/// <remarks>
+		/// Selection is driven by a <see cref="Random"/> seeded from <see cref="BadBulbSeed"/> rather than
+		/// by hashing each index, because that gives exactly the requested count instead of approximately
+		/// it. Seeding is the point: an unseeded generator would reshuffle the bulbs on every re-render,
+		/// so simply nudging an unrelated property would silently move them.
+		/// </remarks>
+		private void BuildBadBulbs()
+		{
+			_badBulbs = null;
+
+			int total = BufferWi * BufferHt;
+			if (BadBulbs <= 0 || total <= 0) return;
+
+			// Leave at least one bulb alive; an entirely dead element is never what was wanted.
+			int dead = Math.Min(BadBulbs, total - 1);
+			if (dead <= 0) return;
+
+			var mask = new bool[total];
+			var random = new Random(BadBulbSeed);
+			int placed = 0;
+			while (placed < dead)
+			{
+				int index = random.Next(total);
+				if (mask[index]) continue;
+				mask[index] = true;
+				placed++;
+			}
+
+			_badBulbs = mask;
+		}
+
+		/// <summary>
+		/// True if the pixel at the specified buffer coordinate is a blown bulb.
+		/// </summary>
+		/// <param name="x">Zero based buffer X coordinate</param>
+		/// <param name="y">Zero based buffer Y coordinate</param>
+		/// <returns>True when the bulb never lights</returns>
+		private bool IsBadBulb(int x, int y)
+		{
+			if (_badBulbs == null) return false;
+			if (x < 0 || y < 0 || x >= BufferWi || y >= BufferHt) return false;
+			return _badBulbs[y * BufferWi + x];
 		}
 
 		/// <summary>
@@ -585,6 +772,11 @@ namespace VixenModules.Effect.Marquee
 				line[s] = RenderPixel(s, axisLength, level);
 			}
 
+			// Blown bulbs are the one thing that does vary across the perpendicular axis, so they cannot
+			// come out of the shared line -- reusing it would kill whole rows of a matrix instead of single
+			// bulbs.  Only pay for the per-pixel walk when there are actually some.
+			bool anyBadBulbs = _badBulbs != null;
+
 			if (_moveAlongX)
 			{
 				for (int x = 0; x < width; x++)
@@ -593,6 +785,7 @@ namespace VixenModules.Effect.Marquee
 					if (c.A == 0) continue;
 					for (int y = 0; y < height; y++)
 					{
+						if (anyBadBulbs && IsBadBulb(x, y)) continue;
 						frameBuffer.SetPixel(x, y, c);
 					}
 				}
@@ -605,6 +798,7 @@ namespace VixenModules.Effect.Marquee
 					if (c.A == 0) continue;
 					for (int x = 0; x < width; x++)
 					{
+						if (anyBadBulbs && IsBadBulb(x, y)) continue;
 						frameBuffer.SetPixel(x, y, c);
 					}
 				}
@@ -631,6 +825,8 @@ namespace VixenModules.Effect.Marquee
 					// Offset to zero based coordinates for the pattern math.
 					int zx = location.X - BufferWiOffset;
 					int zy = location.Y - BufferHtOffset;
+
+					if (IsBadBulb(zx, zy)) continue;
 
 					double s = _moveAlongX ? zx : zy;
 					Color c = RenderPixel(s, axisLength, level);
@@ -675,6 +871,24 @@ namespace VixenModules.Effect.Marquee
 			// -- is the stagger, and lives in GroupRipple.  Splitting it this way is what lets a group sit
 			// genuinely still between shoves rather than drifting through the pause.
 			_phase = _scrollPhase + _rippleStep * _ripplePhase;
+
+			// Remap the animation curve so 0 is assembled.  Exactly 50 has to land on exactly 0 or the
+			// neutral position would not be neutral and simply picking an animation would nudge the
+			// pattern.
+			if (Animation == MarqueeAnimation.None)
+			{
+				_animSigned = 0.0;
+				_animAmount = 0.0;
+				_animActive = false;
+				return;
+			}
+
+			double curve = AnimationCurve.GetValue(GetEffectTimeIntervalPosition(frame) * 100.0);
+			_animSigned = (curve - 50.0) / 50.0;
+			if (_animSigned < -1.0) _animSigned = -1.0;
+			else if (_animSigned > 1.0) _animSigned = 1.0;
+			_animAmount = Math.Abs(_animSigned);
+			_animActive = _animAmount > 0.0;
 		}
 
 		/// <summary>
@@ -827,10 +1041,19 @@ namespace VixenModules.Effect.Marquee
 		/// <returns>The color for the pixel, or transparent if it is off</returns>
 		private Color RenderPixel(double s, int axisLength, double level)
 		{
+			// Slide works by moving where on the pattern this LED reads from rather than by moving the
+			// groups, which leaves the group maths and every bound it relies on completely alone.
+			double sourceS = s;
+			if (_animActive && Animation == MarqueeAnimation.Slide && !TrySlideSource(s, axisLength, out sourceS))
+			{
+				// Slid off the element.
+				return Color.Transparent;
+			}
+
 			// The element is divided into fixed banks of the step size and the whole bank is treated as one
 			// lamp, so every LED in it shares a brightness and switches with it.  An LED covers [s, s+1), so
 			// the bank containing it spans [b, b+step) and its centre is half a step in.
-			double centre = (Math.Floor(s / _fadeGroup) + 0.5) * _fadeGroup - _dirSign * _phase;
+			double centre = (Math.Floor(sourceS / _fadeGroup) + 0.5) * _fadeGroup - _dirSign * _phase;
 
 			long group;
 			double c;
@@ -838,6 +1061,32 @@ namespace VixenModules.Effect.Marquee
 			{
 				// In the dark gap between groups.
 				return Color.Transparent;
+			}
+
+			// Stack and Dissolve gate whole groups: a group is either in play, on its way in, or not there
+			// yet.  Scale trims each group from the edges or hollows it from the middle.
+			double animGate = 1.0;
+			if (_animActive)
+			{
+				switch (Animation)
+				{
+					case MarqueeAnimation.Dissolve:
+						animGate = DissolveGate(group);
+						break;
+
+					case MarqueeAnimation.Stack:
+						animGate = StackGate(group, centre, axisLength, ref c);
+						break;
+
+					case MarqueeAnimation.Scale:
+						animGate = ScaleGate(c);
+						break;
+				}
+
+				if (animGate <= MinVisibleGate)
+				{
+					return Color.Transparent;
+				}
 			}
 
 			// The Fade curve is read across the bank's journey through the lit group: 0 the moment it lights
@@ -851,19 +1100,188 @@ namespace VixenModules.Effect.Marquee
 			if (idx < 0) idx = 0;
 			else if (idx > _lutSize - 1) idx = _lutSize - 1;
 
-			double brightness = _fadeLut[idx] * level;
+			double brightness = _fadeLut[idx] * level * animGate;
 			if (brightness <= 0.0)
 			{
 				return Color.Transparent;
 			}
 
-			Color baseColor = GetBaseColor(group, c, s, axisLength);
+			Color baseColor = GetBaseColor(group, c, sourceS, axisLength);
 
 			HSV hsv = HSV.FromRGB(baseColor);
 			hsv.V *= (float)brightness;
 			if (hsv.V > 1f) hsv.V = 1f;
 			return hsv.ToRGB();
 		}
+
+		#region Animation
+
+		/// <summary>
+		/// Works out where on the pattern a sliding LED should read from.
+		/// </summary>
+		/// <remarks>
+		/// Slide moves the sample coordinate, not the groups. That is deliberate: the pattern is infinite
+		/// and periodic, so translating the groups themselves would displace it by whole periods and look
+		/// like nothing had happened at all. Moving where the element reads from, and darkening anything
+		/// that reads past either end, windows the pattern down to a finite block that visibly travels on
+		/// and off - and it leaves <see cref="GroupStart"/> and every bound in
+		/// <see cref="TryFindGroup"/> untouched.
+		///
+		/// Center Out and Ends In are two mirrored slides, one per half of the element, each windowed to
+		/// its own half so the halves part and meet in the middle.
+		/// </remarks>
+		/// <param name="s">Coordinate of the pixel along the movement axis (zero based)</param>
+		/// <param name="axisLength">Length of the movement axis</param>
+		/// <param name="sourceS">Coordinate to read the pattern at</param>
+		/// <returns>False when the LED has been slid off the element and should be dark</returns>
+		private bool TrySlideSource(double s, int axisLength, out double sourceS)
+		{
+			// Travel far enough that the block clears the element entirely at full deflection.
+			double travel = _animSigned * (axisLength + _litWidth);
+
+			double low = 0.0;
+			double high = axisLength;
+
+			switch (AnimationFrom)
+			{
+				case MarqueeAnimationFrom.Right:
+					travel = -travel;
+					break;
+
+				case MarqueeAnimationFrom.CenterOut:
+				case MarqueeAnimationFrom.EndsIn:
+				{
+					// Each half slides independently and is clipped to its own half, so they separate at
+					// the middle rather than sliding across one another.
+					double middle = axisLength / 2.0;
+					bool farHalf = s >= middle;
+					if (AnimationFrom == MarqueeAnimationFrom.EndsIn) farHalf = !farHalf;
+
+					travel = farHalf ? travel : -travel;
+					if (s >= middle) low = middle;
+					else high = middle;
+					break;
+				}
+			}
+
+			sourceS = s - travel;
+			return sourceS >= low && sourceS < high;
+		}
+
+		/// <summary>
+		/// How lit a group is under the dissolve, 0 (not yet) to 1 (fully in).
+		/// </summary>
+		/// <remarks>
+		/// Each group gets a threshold from <see cref="Hash01"/>, so the order is scattered but is a stable
+		/// function of the group - identical on every frame and on every re-render. That last part is why
+		/// this does not borrow the Dissolve effect's approach: that one reshuffles from a time-seeded
+		/// generator every time it pre-renders, so editing any unrelated property silently reorders it.
+		/// Groups cross over a short ramp rather than popping, so a slow dissolve reads as a fade.
+		/// </remarks>
+		/// <param name="group">Index of the group within the scrolling pattern</param>
+		/// <returns>Brightness multiplier for the group</returns>
+		private double DissolveGate(long group)
+		{
+			// Both halves of the curve dissolve away; the two differ in which groups go first, so an out
+			// does not simply retrace the in.
+			double threshold = _animSigned > 0.0 ? 1.0 - Hash01(group) : Hash01(group);
+
+			// Sweep the front from one ramp-width below zero up to one, so that at fully out even the group
+			// with the lowest threshold is still behind the ramp and dark.  Sweeping plain 0..1 would leave
+			// the earliest groups part lit at the bottom of the curve.
+			double assembled = 1.0 - _animAmount;
+			double front = assembled * (1.0 + DissolveRampWidth) - DissolveRampWidth;
+
+			double edge = threshold - front;
+			if (edge >= DissolveRampWidth) return 0.0;
+			if (edge <= 0.0) return 1.0;
+			return 1.0 - edge / DissolveRampWidth;
+		}
+
+		/// <summary>
+		/// How lit a group is under the stack: fully in, on its way in, or not yet arrived.
+		/// </summary>
+		/// <remarks>
+		/// Groups land one at a time from the chosen end and everything that has landed keeps running the
+		/// main effect - scroll, ripples, fade and all. Only one group is ever in transit, which is what
+		/// keeps this to a single interval test rather than a widened group search: the arriving group is
+		/// drawn by shifting its position within the group toward the entry edge, so it appears to slide
+		/// into its slot.
+		///
+		/// Slots are spatial, so with Speed above zero a group can drift across the fill threshold while
+		/// the animation is mid-flight. Stack is exact with Speed at 0, which is the natural way to use it.
+		/// </remarks>
+		/// <param name="group">Index of the group within the scrolling pattern</param>
+		/// <param name="centre">Centre of the bank in pattern space</param>
+		/// <param name="axisLength">Length of the movement axis</param>
+		/// <param name="c">Position within the group; shifted for the group currently arriving</param>
+		/// <returns>Brightness multiplier for the group</returns>
+		private double StackGate(long group, double centre, int axisLength, ref double c)
+		{
+			double slots = Math.Max(1.0, axisLength / _period);
+
+			// Where this group sits along the element, counted from the end it stacks from.
+			double groupPos = GroupStart(group) + _dirSign * _phase;
+			double slot = Math.Floor(groupPos / _period);
+			bool fromFarEnd = AnimationFrom == MarqueeAnimationFrom.Right;
+			if (_animSigned > 0.0) fromFarEnd = !fromFarEnd;   // leaves from the opposite end
+			if (fromFarEnd) slot = slots - 1.0 - slot;
+
+			double filled = (1.0 - _animAmount) * slots;
+			double landed = Math.Floor(filled);
+
+			if (slot < landed) return 1.0;
+			if (slot > landed) return 0.0;
+
+			// The one group in transit: slide it in from the entry edge and fade it up as it settles.
+			double arriving = filled - landed;
+			if (arriving <= 0.0) return 0.0;
+
+			c -= (1.0 - arriving) * _litWidth * (fromFarEnd ? -1.0 : 1.0);
+			if (c < 0.0 || c >= _litWidth) return 0.0;
+			return arriving;
+		}
+
+		/// <summary>
+		/// How lit a position within a group is under the scale.
+		/// </summary>
+		/// <remarks>
+		/// The two halves of the curve reach darkness by opposite routes: below 50 the group narrows toward
+		/// its centre so the edges die first, above 50 a hole opens at the centre and eats outward so the
+		/// middle dies first. Brightness is scaled by how much of the bank is still inside the surviving
+		/// band as well as gated on it, so a one LED group fades out instead of snapping.
+		/// </remarks>
+		/// <param name="c">Position within the lit group, 0 to <see cref="_litWidth"/></param>
+		/// <returns>Brightness multiplier for the position</returns>
+		private double ScaleGate(double c)
+		{
+			double half = _litWidth / 2.0;
+
+			// The band measured out from the middle of the group: below 50 it is what stays lit and closes
+			// in from the edges, above 50 it is the hole and opens out from the middle.
+			double bound = _animSigned > 0.0 ? _animAmount * half : (1.0 - _animAmount) * half;
+
+			// Measure against the part of the bank that is inside the group, not the whole bank.  A
+			// scrolling pattern puts banks at fractional offsets, so one can straddle the group's edge;
+			// dividing by the full bank width would then leave the protruding part lit even when the band
+			// covers the entire group, and a fully animated-out pattern would never go quite dark.
+			double bankLow = Math.Max(0.0, c - _fadeGroup / 2.0);
+			double bankHigh = Math.Min(_litWidth, c + _fadeGroup / 2.0);
+			double bankWidth = bankHigh - bankLow;
+			if (bankWidth <= 0.0) return 0.0;
+
+			// Using coverage rather than a fixed soft edge is also what makes the extremes exact for a
+			// one-bank group, where an edge half a step wide would be as wide as the whole group.
+			double overlap = Math.Min(bankHigh, half + bound) - Math.Max(bankLow, half - bound);
+			if (overlap < 0.0) overlap = 0.0;
+
+			double covered = overlap / bankWidth;
+			if (covered > 1.0) covered = 1.0;
+
+			return _animSigned > 0.0 ? 1.0 - covered : covered;
+		}
+
+		#endregion
 
 		/// <summary>
 		/// Determines the (un-dimmed) color for a pixel based on the selected color mode.
@@ -966,7 +1384,49 @@ namespace VixenModules.Effect.Marquee
 		{
 			UpdateStringOrientationAttributes(true);
 			UpdateRippleAttributes(false);
+			UpdateAnimationAttributes(false);
+			UpdateBadBulbAttributes(false);
 			TypeDescriptor.Refresh(this);
+		}
+
+		/// <summary>
+		/// Updates the visibility of the animation attributes. Nothing about the animation matters until one
+		/// is chosen, and the axis only matters for the two that travel along it.
+		/// </summary>
+		/// <param name="refresh">True to refresh the type descriptor after updating visibility</param>
+		private void UpdateAnimationAttributes(bool refresh = true)
+		{
+			bool animating = Animation != MarqueeAnimation.None;
+			bool travels = Animation == MarqueeAnimation.Slide || Animation == MarqueeAnimation.Stack;
+
+			Dictionary<string, bool> propertyStates = new Dictionary<string, bool>(2)
+			{
+				{ nameof(AnimationCurve), animating },
+				{ nameof(AnimationFrom), animating && travels },
+			};
+			SetBrowsable(propertyStates);
+			if (refresh)
+			{
+				TypeDescriptor.Refresh(this);
+			}
+		}
+
+		/// <summary>
+		/// Updates the visibility of the bad bulb attributes. The seed only means anything once there are
+		/// some bulbs to pick.
+		/// </summary>
+		/// <param name="refresh">True to refresh the type descriptor after updating visibility</param>
+		private void UpdateBadBulbAttributes(bool refresh = true)
+		{
+			Dictionary<string, bool> propertyStates = new Dictionary<string, bool>(1)
+			{
+				{ nameof(BadBulbSeed), BadBulbs > 0 },
+			};
+			SetBrowsable(propertyStates);
+			if (refresh)
+			{
+				TypeDescriptor.Refresh(this);
+			}
 		}
 
 		/// <summary>
