@@ -266,6 +266,9 @@ namespace VixenModules.App.Curves
 					PointPairList pointList = zedGraphControl.GraphPane.CurveList[0].Points as PointPairList;
 					pointList.Clear();
 					pointList.Add(points);
+					// Flattening throws away the old points and with them any Bezier handles, so the handle
+					// visuals have to go too or they are left stranded where the deleted points used to be.
+					UpdateHandleGraphObjects();
 					zedGraphControl.Invalidate();
 					txtYValue.Text = newY.ToString("0.####");
 					txtXValue.Text = "";
@@ -726,6 +729,8 @@ namespace VixenModules.App.Curves
 			toolTip.ToolTipTitle = "Draw Curve";
 			toolTip.Show("Draw curve from left side to right side of grid using the left mouse button", btnDraw, -100, -400, 4000);
 			zedGraphControl.GraphPane.CurveList[0].Clear();
+			// Clearing the points takes any Bezier handles with them, so drop the handle visuals as well.
+			UpdateHandleGraphObjects();
 			zedGraphControl.Invalidate();
 			_tempX = 0;
 			_drawCurve = true;
@@ -740,6 +745,8 @@ namespace VixenModules.App.Curves
 				return;
 			}
 			zedGraphControl.GraphPane.CurveList[0].Clear();
+			// Clearing the points takes any Bezier handles with them, so drop the handle visuals as well.
+			UpdateHandleGraphObjects();
 			zedGraphControl.Invalidate();
 			//string f = "Sin(2 * Pi * (x / 100)) * ((25-7)/2) + ((25-7) /2) + 7";
 			if (string.IsNullOrEmpty(fGen.Function))

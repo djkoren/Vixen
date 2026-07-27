@@ -448,7 +448,7 @@ namespace VixenModules.Effect.Marquee
 		/// Gets or sets which animation brings the pattern on and off.
 		/// </summary>
 		[Value]
-		[ProviderCategory(@"Animation", 2)]
+		[ProviderCategory(@"Animate In/Out", 2)]
 		[ProviderDisplayName(@"Animation")]
 		[ProviderDescription(@"How the pattern arrives and leaves.")]
 		[PropertyOrder(0)]
@@ -469,7 +469,7 @@ namespace VixenModules.Effect.Marquee
 		/// arriving and above 50 it is leaving by the opposite route, so one curve does both.
 		/// </summary>
 		[Value]
-		[ProviderCategory(@"Animation", 2)]
+		[ProviderCategory(@"Animate In/Out", 2)]
 		[ProviderDisplayName(@"Animation Curve")]
 		[ProviderDescription(@"50 is fully on.  Below is arriving, above is leaving the other way.")]
 		[PropertyOrder(1)]
@@ -489,8 +489,8 @@ namespace VixenModules.Effect.Marquee
 		/// end.
 		/// </summary>
 		[Value]
-		[ProviderCategory(@"Animation", 2)]
-		[ProviderDisplayName(@"Animation From")]
+		[ProviderCategory(@"Animate In/Out", 2)]
+		[ProviderDisplayName(@"Animate From")]
 		[ProviderDescription(@"Which end it arrives from.  It leaves by the other.")]
 		[PropertyOrder(2)]
 		public MarqueeAnimationFrom AnimationFrom
@@ -499,6 +499,47 @@ namespace VixenModules.Effect.Marquee
 			set
 			{
 				_data.AnimationFrom = value;
+				UpdateAnimationAttributes();
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
+		/// <summary>
+		/// Gets or sets the motion a group travels through as it slides into its slot in a stack. 0 is the
+		/// moment it sets off and 100 the moment it lands, so an eased curve gives the groups weight.
+		/// </summary>
+		[Value]
+		[ProviderCategory(@"Animate In/Out", 2)]
+		[ProviderDisplayName(@"Stack Curve")]
+		[ProviderDescription(@"How a group moves as it slides into place.")]
+		[PropertyOrder(3)]
+		public Curve StackCurve
+		{
+			get { return _data.StackCurve; }
+			set
+			{
+				_data.StackCurve = value;
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
+		/// <summary>
+		/// Gets or sets in what order groups land when a stack starts from the centre: both sides together,
+		/// or one at a time alternating sides.
+		/// </summary>
+		[Value]
+		[ProviderCategory(@"Animate In/Out", 2)]
+		[ProviderDisplayName(@"Center Order")]
+		[ProviderDescription(@"Whether both sides land together or alternate.")]
+		[PropertyOrder(4)]
+		public MarqueeCenterOrder CenterOrder
+		{
+			get { return _data.CenterOrder; }
+			set
+			{
+				_data.CenterOrder = value;
 				IsDirty = true;
 				OnPropertyChanged();
 			}
@@ -1041,32 +1082,39 @@ namespace VixenModules.Effect.Marquee
 		/// <returns>The color for the pixel, or transparent if it is off</returns>
 		private Color RenderPixel(double s, int axisLength, double level)
 		{
-			// Slide works by moving where on the pattern this LED reads from rather than by moving the
-			// groups, which leaves the group maths and every bound it relies on completely alone.
-			double sourceS = s;
-			if (_animActive && Animation == MarqueeAnimation.Slide && !TrySlideSource(s, axisLength, out sourceS))
+			// Slide opens up an arc of the element to the pattern rather than moving the pattern, which
+			// leaves the group maths and every bound it relies on completely alone.
+			if (_animActive && Animation == MarqueeAnimation.Slide && !IsWithinSlide(s, axisLength))
 			{
-				// Slid off the element.
+				// The pattern has not reached this LED yet, or has already left it.
 				return Color.Transparent;
 			}
 
 			// The element is divided into fixed banks of the step size and the whole bank is treated as one
 			// lamp, so every LED in it shares a brightness and switches with it.  An LED covers [s, s+1), so
 			// the bank containing it spans [b, b+step) and its centre is half a step in.
-			double centre = (Math.Floor(sourceS / _fadeGroup) + 0.5) * _fadeGroup - _dirSign * _phase;
+			double centre = (Math.Floor(s / _fadeGroup) + 0.5) * _fadeGroup - _dirSign * _phase;
 
 			long group;
 			double c;
-			if (!TryFindGroup(centre, out group, out c))
-			{
-				// In the dark gap between groups.
-				return Color.Transparent;
-			}
+			bool onGroup = TryFindGroup(centre, out group, out c);
 
 			// Stack and Dissolve gate whole groups: a group is either in play, on its way in, or not there
 			// yet.  Scale trims each group from the edges or hollows it from the middle.
 			double animGate = 1.0;
-			if (_animActive)
+			if (_animActive && Animation == MarqueeAnimation.Stack)
+			{
+				// Asked even where the LED falls in a gap.  The group sliding in is displaced from its own
+				// slot, so it covers LEDs that its slot does not - returning early on the gap would mean it
+				// was only ever visible once it had already landed.
+				animGate = StackGate(onGroup, centre, axisLength, ref group, ref c);
+			}
+			else if (!onGroup)
+			{
+				// In the dark gap between groups.
+				return Color.Transparent;
+			}
+			else if (_animActive)
 			{
 				switch (Animation)
 				{
@@ -1074,19 +1122,15 @@ namespace VixenModules.Effect.Marquee
 						animGate = DissolveGate(group);
 						break;
 
-					case MarqueeAnimation.Stack:
-						animGate = StackGate(group, centre, axisLength, ref c);
-						break;
-
 					case MarqueeAnimation.Scale:
 						animGate = ScaleGate(c);
 						break;
 				}
+			}
 
-				if (animGate <= MinVisibleGate)
-				{
-					return Color.Transparent;
-				}
+			if (animGate <= MinVisibleGate)
+			{
+				return Color.Transparent;
 			}
 
 			// The Fade curve is read across the bank's journey through the lit group: 0 the moment it lights
@@ -1106,7 +1150,7 @@ namespace VixenModules.Effect.Marquee
 				return Color.Transparent;
 			}
 
-			Color baseColor = GetBaseColor(group, c, sourceS, axisLength);
+			Color baseColor = GetBaseColor(group, c, s, axisLength);
 
 			HSV hsv = HSV.FromRGB(baseColor);
 			hsv.V *= (float)brightness;
@@ -1117,55 +1161,56 @@ namespace VixenModules.Effect.Marquee
 		#region Animation
 
 		/// <summary>
-		/// Works out where on the pattern a sliding LED should read from.
+		/// Whether a sliding LED is inside the arc of the element the pattern has reached.
 		/// </summary>
 		/// <remarks>
-		/// Slide moves the sample coordinate, not the groups. That is deliberate: the pattern is infinite
-		/// and periodic, so translating the groups themselves would displace it by whole periods and look
-		/// like nothing had happened at all. Moving where the element reads from, and darkening anything
-		/// that reads past either end, windows the pattern down to a finite block that visibly travels on
-		/// and off - and it leaves <see cref="GroupStart"/> and every bound in
-		/// <see cref="TryFindGroup"/> untouched.
+		/// The pattern is left exactly where it is and an arc of the element is opened up to it, growing
+		/// from nothing at the extremes to the whole element at 50. The arc's leading edge travels with
+		/// the pattern, so a part-finished slide keeps circling the element rather than sitting in a dead
+		/// half with the pattern cut off at a fixed line - and because the arc carries its own entry point
+		/// around with it, the pattern is never added back on top of where it already is.
 		///
-		/// Center Out and Ends In are two mirrored slides, one per half of the element, each windowed to
-		/// its own half so the halves part and meet in the middle.
+		/// Reading the pattern in place rather than shifting where it is sampled from also avoids a seam:
+		/// the pattern only tiles the element exactly under Fit To Element, so a wrapped sample coordinate
+		/// would otherwise cut a group in half at the wrap point.
 		/// </remarks>
 		/// <param name="s">Coordinate of the pixel along the movement axis (zero based)</param>
 		/// <param name="axisLength">Length of the movement axis</param>
-		/// <param name="sourceS">Coordinate to read the pattern at</param>
-		/// <returns>False when the LED has been slid off the element and should be dark</returns>
-		private bool TrySlideSource(double s, int axisLength, out double sourceS)
+		/// <returns>True when the pattern has reached this LED</returns>
+		private bool IsWithinSlide(double s, int axisLength)
 		{
-			// Travel far enough that the block clears the element entirely at full deflection.
-			double travel = _animSigned * (axisLength + _litWidth);
+			double arc = (1.0 - _animAmount) * axisLength;
+			if (arc <= 0.0) return false;
+			if (arc >= axisLength) return true;
 
-			double low = 0.0;
-			double high = axisLength;
-
-			switch (AnimationFrom)
+			// Leaving goes out of the opposite end, so the two halves of the curve are different journeys
+			// rather than one retraced.
+			MarqueeAnimationFrom from = AnimationFrom;
+			if (_animSigned > 0.0)
 			{
-				case MarqueeAnimationFrom.Right:
-					travel = -travel;
-					break;
-
-				case MarqueeAnimationFrom.CenterOut:
-				case MarqueeAnimationFrom.EndsIn:
-				{
-					// Each half slides independently and is clipped to its own half, so they separate at
-					// the middle rather than sliding across one another.
-					double middle = axisLength / 2.0;
-					bool farHalf = s >= middle;
-					if (AnimationFrom == MarqueeAnimationFrom.EndsIn) farHalf = !farHalf;
-
-					travel = farHalf ? travel : -travel;
-					if (s >= middle) low = middle;
-					else high = middle;
-					break;
-				}
+				if (from == MarqueeAnimationFrom.Left) from = MarqueeAnimationFrom.Right;
+				else if (from == MarqueeAnimationFrom.Right) from = MarqueeAnimationFrom.Left;
 			}
 
-			sourceS = s - travel;
-			return sourceS >= low && sourceS < high;
+			if (from == MarqueeAnimationFrom.CenterOut)
+			{
+				double middle = (axisLength - 1) / 2.0;
+
+				// Growing out from the middle on the way in; on the way out the arc sits at the two ends
+				// instead, so the middle empties first and the journey is not simply reversed.
+				return _animSigned > 0.0
+					? Math.Abs(s - middle) >= (axisLength - arc) / 2.0
+					: Math.Abs(s - middle) <= arc / 2.0;
+			}
+
+			// The head rides along with the pattern, so the arc keeps travelling round the element even
+			// while the curve is held still.
+			double head = Mod(_dirSign * _phase, axisLength);
+			double behindHead = from == MarqueeAnimationFrom.Right
+				? Mod(s - head, axisLength)
+				: Mod(head - s, axisLength);
+
+			return behindHead < arc;
 		}
 
 		/// <summary>
@@ -1199,47 +1244,152 @@ namespace VixenModules.Effect.Marquee
 		}
 
 		/// <summary>
-		/// How lit a group is under the stack: fully in, on its way in, or not yet arrived.
+		/// Where a group sits in the landing queue, counting from wherever the stack starts.
+		/// </summary>
+		/// <remarks>
+		/// Groups pile up against the far end, so the slot furthest from where they come in is the one that
+		/// fills first. That is what stacking actually does, and it also means an arriving group never has
+		/// to cross the ones already landed - which would otherwise have it passing straight through them.
+		/// </remarks>
+		/// <param name="group">Index of the group within the scrolling pattern</param>
+		/// <param name="slots">How many group slots fit on the element</param>
+		/// <param name="orderCount">How many landings it takes to fill the element</param>
+		/// <param name="reversed">True when the stack is unstacking, which empties from the other end</param>
+		/// <param name="side">-1 or +1 for which side of the middle a centre stack lands on; 0 otherwise</param>
+		/// <returns>Place in the queue, 0 being the first to land, or -1 when the group is off the element</returns>
+		private double StackOrder(long group, double slots, double orderCount, bool reversed, out double side)
+		{
+			side = 0.0;
+
+			double groupPos = GroupStart(group) + _dirSign * _phase;
+			double slot = Math.Floor(groupPos / _period);
+			if (slot < 0.0 || slot >= slots) return -1.0;
+
+			double order;
+
+			if (AnimationFrom == MarqueeAnimationFrom.CenterOut)
+			{
+				double middleSlot = (slots - 1.0) / 2.0;
+				double outward = slot - middleSlot;
+				side = outward >= 0.0 ? 1.0 : -1.0;
+
+				double rings = Math.Floor(Math.Abs(outward));
+				double fromMiddle = CenterOrder == MarqueeCenterOrder.BothSides
+					? rings                                        // both sides land together
+					: rings * 2.0 + (side > 0.0 ? 1.0 : 0.0);      // one at a time, alternating
+
+				// Coming out of the middle, the outermost ring is the one that fills first.
+				order = orderCount - 1.0 - fromMiddle;
+			}
+			else
+			{
+				bool comesInFromLowEnd = AnimationFrom != MarqueeAnimationFrom.Right;
+				order = comesInFromLowEnd ? slots - 1.0 - slot : slot;
+			}
+
+			return reversed ? orderCount - 1.0 - order : order;
+		}
+
+		/// <summary>
+		/// How lit a group is under the stack: landed, still sliding in, or not started yet.
 		/// </summary>
 		/// <remarks>
 		/// Groups land one at a time from the chosen end and everything that has landed keeps running the
-		/// main effect - scroll, ripples, fade and all. Only one group is ever in transit, which is what
-		/// keeps this to a single interval test rather than a widened group search: the arriving group is
-		/// drawn by shifting its position within the group toward the entry edge, so it appears to slide
-		/// into its slot.
+		/// main effect - scroll, ripples, fade and all.
+		///
+		/// The group still on its way in is drawn by looking the pattern up again at a shifted coordinate,
+		/// which is the same trick <see cref="IsWithinSlide"/> uses and for the same reason: it moves the
+		/// group a whole element's width if need be while leaving the group maths and the one-cell search
+		/// in <see cref="TryFindGroup"/> completely intact. Shifting the position *within* the group
+		/// instead would only ever nudge it a group's width and would slice it in half on the way.
+		///
+		/// How far it has left to go is only ever an estimate, but the shift reaches exactly zero when it
+		/// lands, so a group always settles precisely into its slot however roughly it set off.
 		///
 		/// Slots are spatial, so with Speed above zero a group can drift across the fill threshold while
 		/// the animation is mid-flight. Stack is exact with Speed at 0, which is the natural way to use it.
 		/// </remarks>
-		/// <param name="group">Index of the group within the scrolling pattern</param>
+		/// <param name="onGroup">True when the un-shifted lookup landed inside a group's own slot</param>
 		/// <param name="centre">Centre of the bank in pattern space</param>
 		/// <param name="axisLength">Length of the movement axis</param>
-		/// <param name="c">Position within the group; shifted for the group currently arriving</param>
+		/// <param name="owner">The group found naturally; replaced by the one sliding in when that wins</param>
+		/// <param name="c">Position within the group, replaced for the group sliding in</param>
 		/// <returns>Brightness multiplier for the group</returns>
-		private double StackGate(long group, double centre, int axisLength, ref double c)
+		private double StackGate(bool onGroup, double centre, int axisLength, ref long owner, ref double c)
 		{
 			double slots = Math.Max(1.0, axisLength / _period);
+			bool reversed = _animSigned > 0.0;   // unstacking starts from the other end
 
-			// Where this group sits along the element, counted from the end it stacks from.
-			double groupPos = GroupStart(group) + _dirSign * _phase;
-			double slot = Math.Floor(groupPos / _period);
-			bool fromFarEnd = AnimationFrom == MarqueeAnimationFrom.Right;
-			if (_animSigned > 0.0) fromFarEnd = !fromFarEnd;   // leaves from the opposite end
-			if (fromFarEnd) slot = slots - 1.0 - slot;
+			bool centreStack = AnimationFrom == MarqueeAnimationFrom.CenterOut;
+			double orderCount = centreStack && CenterOrder == MarqueeCenterOrder.BothSides
+				? Math.Ceiling(slots / 2.0)
+				: slots;
 
-			double filled = (1.0 - _animAmount) * slots;
+			double filled = (1.0 - _animAmount) * orderCount;
 			double landed = Math.Floor(filled);
 
-			if (slot < landed) return 1.0;
-			if (slot > landed) return 0.0;
+			if (onGroup)
+			{
+				double order = StackOrder(owner, slots, orderCount, reversed, out _);
+				if (order >= 0.0 && order < landed) return 1.0;
+			}
 
-			// The one group in transit: slide it in from the entry edge and fade it up as it settles.
 			double arriving = filled - landed;
 			if (arriving <= 0.0) return 0.0;
 
-			c -= (1.0 - arriving) * _litWidth * (fromFarEnd ? -1.0 : 1.0);
-			if (c < 0.0 || c >= _litWidth) return 0.0;
-			return arriving;
+			// Shape the travel so the groups can be given weight rather than sliding in at a flat rate.
+			double eased = StackCurve.GetValue(arriving * 100.0) / 100.0;
+			if (eased < 0.0) eased = 0.0;
+			else if (eased > 1.0) eased = 1.0;
+
+			// How far it has to come.  Since the stack fills from the far end, each successive group stops
+			// a slot shorter than the last.  A centre stack sets off from the middle instead, so its
+			// distance follows the ring it is bound for - with alternating sides that is half the landing
+			// count, and using the count directly would send a group in from the wrong side of the middle.
+			double stepsOut = Math.Max(0.0, orderCount - 1.0 - landed);
+			double ringsOut = centreStack && CenterOrder == MarqueeCenterOrder.Alternate
+				? Math.Floor(stepsOut / 2.0)
+				: stepsOut;
+
+			// Pulling a centre stack's start in by a group keeps the pair that sets off together on their
+			// own sides of the middle.  Starting both exactly at the middle has them occupy the same LED
+			// as they cross, which reads as one of the two blinking out for a frame.
+			double distance = centreStack
+				? Math.Max(_litWidth, (ringsOut + 0.5) * _period - _litWidth)
+				: stepsOut * _period + _litWidth;
+
+			double travel = (1.0 - eased) * distance;
+			if (travel <= 0.0) travel = 0.0;
+
+			// A centre stack sends one group out each way, so both directions have to be tried.
+			bool towardHigher = AnimationFrom != MarqueeAnimationFrom.Right;
+			if (reversed && !centreStack) towardHigher = !towardHigher;
+
+			for (int attempt = 0; attempt < (centreStack ? 2 : 1); attempt++)
+			{
+				double shift = travel * (attempt == 0 ? 1.0 : -1.0) * (towardHigher ? 1.0 : -1.0);
+
+				long candidate;
+				double candidateOffset;
+				if (!TryFindGroup(centre + shift, out candidate, out candidateOffset)) continue;
+
+				double candidateSide;
+				if (StackOrder(candidate, slots, orderCount, reversed, out candidateSide) != landed) continue;
+
+				// On a centre stack each side travels its own way, so ignore the one going the wrong way.
+				if (centreStack && candidateSide != 0.0)
+				{
+					bool wantHigher = candidateSide > 0.0;
+					if (reversed) wantHigher = !wantHigher;
+					if ((shift > 0.0) != wantHigher) continue;
+				}
+
+				owner = candidate;
+				c = candidateOffset;
+				return 1.0;
+			}
+
+			return 0.0;
 		}
 
 		/// <summary>
@@ -1398,11 +1548,14 @@ namespace VixenModules.Effect.Marquee
 		{
 			bool animating = Animation != MarqueeAnimation.None;
 			bool travels = Animation == MarqueeAnimation.Slide || Animation == MarqueeAnimation.Stack;
+			bool stacking = Animation == MarqueeAnimation.Stack;
 
-			Dictionary<string, bool> propertyStates = new Dictionary<string, bool>(2)
+			Dictionary<string, bool> propertyStates = new Dictionary<string, bool>(4)
 			{
 				{ nameof(AnimationCurve), animating },
 				{ nameof(AnimationFrom), animating && travels },
+				{ nameof(StackCurve), stacking },
+				{ nameof(CenterOrder), stacking && AnimationFrom == MarqueeAnimationFrom.CenterOut },
 			};
 			SetBrowsable(propertyStates);
 			if (refresh)
