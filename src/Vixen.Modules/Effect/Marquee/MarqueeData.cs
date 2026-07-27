@@ -43,6 +43,8 @@ namespace VixenModules.Effect.Marquee
 			// A straight ramp, so a group slides in at a steady rate until the user shapes it.
 			StackCurve = new Curve(new PointPairList(new[] { 0.0, 100.0 }, new[] { 0.0, 100.0 }));
 			CenterOrder = MarqueeCenterOrder.BothSides;
+			// Shutter closed, so a new effect renders exactly as it did before motion blur existed.
+			MotionBlur = 0;
 			// No blown bulbs. The seed only matters once there are some.
 			BadBulbs = 0;
 			BadBulbSeed = 1;
@@ -124,6 +126,14 @@ namespace VixenModules.Effect.Marquee
 		[DataMember]
 		public MarqueeCenterOrder CenterOrder { get; set; }
 
+		/// <summary>
+		/// Shutter angle in degrees, 0 to 360, exactly as on a film camera: 0 is a closed shutter and no
+		/// blur at all, 180 the usual cinema look, 360 a shutter open for the whole frame. Only used by
+		/// the <see cref="MarqueeAnimation.Slide"/> and <see cref="MarqueeAnimation.Stack"/> animations.
+		/// </summary>
+		[DataMember]
+		public int MotionBlur { get; set; }
+
 		/// <summary>How many LEDs on the element are blown and never light. 0 = none.</summary>
 		[DataMember]
 		public int BadBulbs { get; set; }
@@ -179,6 +189,18 @@ namespace VixenModules.Effect.Marquee
 				BadBulbs = 0;
 			}
 
+			// Sequences saved before motion blur existed deserialize a zero shutter, which is exactly the
+			// no-blur behaviour they were authored against, so nothing needs defaulting here beyond a range
+			// guard.
+			if (MotionBlur < 0)
+			{
+				MotionBlur = 0;
+			}
+			else if (MotionBlur > 360)
+			{
+				MotionBlur = 360;
+			}
+
 			// Those sequences also deserialize a zero seed, which would make every one of them pick the
 			// same arrangement the moment bad bulbs were turned on.
 			if (BadBulbSeed == 0)
@@ -219,6 +241,7 @@ namespace VixenModules.Effect.Marquee
 				AnimationFrom = AnimationFrom,
 				StackCurve = new Curve(StackCurve),
 				CenterOrder = CenterOrder,
+				MotionBlur = MotionBlur,
 				BadBulbs = BadBulbs,
 				BadBulbSeed = BadBulbSeed,
 				Orientation = Orientation,

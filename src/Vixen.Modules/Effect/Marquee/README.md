@@ -55,6 +55,10 @@ Groups flicker on in a scattered order and a few never do.
 **Assembling itself** — Animation `Stack`, Animate From `Left`, Speed `0`, and a Stack Curve with an
 ease at both ends. Groups fly in one at a time and pile up against the far end with weight.
 
+**Assembling while it runs** — the same, but leave Speed up and turn on Fit To Element. The groups that
+have landed travel round the prop together, still scrolling and fading, and the rest drop in behind them
+as the curve climbs. Add **Motion Blur** `180` and the flying groups streak in instead of stepping.
+
 
 ## Controls
 
@@ -104,6 +108,13 @@ that moves or reveals groups individually has to live here.
 | **Animate From** | Which end of the movement axis it arrives from: `Left`, `Right`, `Center Out`. It leaves by the far end. Only shown for Slide and Stack; Dissolve and Scale have no axis. Named for a horizontal movement axis — on a vertical one they read as top and bottom. *(There is no ends‑inward option: reversing the curve gives exactly that.)* |
 | **Stack Curve** | How a group moves as it slides into place — 0 is the moment it sets off, 100 the moment it lands. An eased curve gives the groups weight. Only shown for Stack. |
 | **Center Order** | Whether a centre stack lands `Both Sides At Once` (two per step, symmetric, fills in half the time) or `Alternate Sides` (one at a time, zig‑zagging outward). Only shown for Stack with Animate From at Center. |
+| **Motion Blur** | Shutter angle in degrees, read exactly as on a film camera: `0` is a closed shutter and hard, strobed edges, `180` the usual cinema look, `360` a shutter open for the whole frame so one frame's smear meets the next with no gap. Only shown for Slide and Stack — they are the two that carry something across the element fast enough to smear. Off by default. |
+
+**Motion Blur costs render time.** The frame is genuinely rendered several times over and averaged (up to 16 at
+360°, fewer as the angle closes), which is what makes it a real exposure rather than a smudge filter. It also
+blurs the ordinary scroll and the ripples while it is on, because a shutter cannot pick and choose what it
+collects — that is usually wanted, but it is why a blurred effect never renders byte‑identical to an unblurred
+one even at a neutral curve.
 
 **The curve is the whole animation.** Not a duration, not a slider — so it can animate on over the
 first beat, sit still, and leave on the last, any shape, any number of times.
@@ -120,16 +131,26 @@ curve   0 ---------- 50 ---------- 100
 flat 50        no animation at all
 ```
 
-**At exactly 50 every mode renders identically to `None`.** That is enforced by a test, not just
-intended: the neutral point has to be genuinely neutral or picking an animation would nudge the
-pattern before you had asked it to do anything.
+**At exactly 50 every mode renders identically to `None`** — a hard invariant, not a nicety. The
+neutral point has to be genuinely neutral or picking an animation would nudge the pattern before you
+had asked it to do anything, so each mode's displacement is written to reach exactly zero there
+rather than merely near it. (Motion Blur is the one exception, and deliberately: a shutter collects
+whatever moved, including the ordinary scroll.)
 
 | Mode | Below 50 | Above 50 |
 | --- | --- | --- |
-| **Slide** | An arc of the element opens up to the pattern, growing from nothing to the whole prop. The arc's leading edge **travels with the pattern**, so holding the curve part‑way leaves the pattern circling the prop rather than parked in a dead half — and because the arc carries its entry point round with it, pattern is never added back over where it already is. | Keeps going and closes from the opposite end. `Center Out` grows from the middle on the way in and empties from the middle on the way out. |
+| **Slide** | The pattern really slides: a sheet an element long, off the prop entirely at 0 and exactly over it at 50, translating on from the chosen end with only the part that has arrived drawn. | Carries straight on the same way and leaves by the far end. `Center Out` tears the sheet at the middle and slides the two halves out to their own ends, then off them. |
 | **Dissolve** | Groups appear in a scattered order, each fading up as its turn arrives. Whole **groups**, never individual LEDs. | Leaves in a *different* scattered order, so an out is not the in retraced. |
 | **Stack** | Groups slide in one at a time from the chosen end and **pile up against the far end**, each stopping a slot short of the last. Whatever has landed **keeps running the main effect** — scroll, ripples, fade and all — so the pattern comes alive as it fills. | Unstacks from the other end. |
 | **Scale** | Each group narrows toward its own centre, so the edges die first. | A hole opens at each group's centre and eats outward, so the middle dies first. Both extremes reach dark by opposite routes. |
+
+**Both travelling modes ride with the pattern.** Slide and Stack are laid out in a frame that moves
+with the scroll, so a curve held part‑way does not park them: the stretch that has arrived keeps
+circling the prop, carrying its own entry point round with it. Hold a Slide at 25 and half a prop's
+worth of pattern runs laps; hold a Stack at 30 and the three or four groups that have landed travel
+round together, still scrolling and rippling, and the rest drop in behind them whenever the curve
+moves on. At Speed 0 both are stationary and fill from the end you picked, which is the classic way
+to use them.
 
 ### Color
 | Property | Meaning |
@@ -245,10 +266,8 @@ LEDs), so the string renderer always computes one line and reuses it across the 
 Deliberately four different layers, chosen so the group maths and the bounds it relies on stay intact
 wherever possible:
 
-- **Slide** leaves the pattern exactly where it is and opens an *arc* of the element up to it, sized by
-  the curve and with its leading edge riding along with the pattern. Reading the pattern in place
-  rather than shifting where it is sampled from also avoids a seam: the pattern only tiles the element
-  exactly under Fit To Element, so a wrapped sample coordinate would cut a group in half at the wrap.
+- **Slide** displaces where the pattern is sampled from — by `animSigned · axisLength`, so ±1 puts it a
+  whole element off either end and 0 puts it exactly home — and draws only the stretch it has reached.
 - **Dissolve** is a per-group brightness gate on `Hash01(group)`. Deliberately *not* the Dissolve
   effect's approach: that one reshuffles from a time-seeded generator on every pre-render, so editing
   any unrelated property silently reorders it. `Hash01` is stable across frames *and* re-renders.
@@ -264,6 +283,58 @@ wherever possible:
   bank *inside* the group. That last part matters: a scrolling pattern puts banks at fractional offsets
   so one can straddle the group's edge, and dividing by the full bank width leaves the protruding part
   lit even when the hole covers the whole group.
+
+### The travelling frame
+
+Slide and Stack both work in `u = mod(patternCoordinate, axisLength)` rather than in element
+coordinates. It is one line in each, and it is what makes them ride with the pattern: `u` advances at
+exactly the scroll rate, so anything laid out on it does too.
+
+For **Slide** that is the difference between a slide and a wipe. The visible stretch is `[0, L+σ)` in
+`u` (or `[σ, L)` when leaving), and the pattern is displaced by the same `σ`, so the window's far edge
+and the pattern's leading edge move at *identical* speeds — `scroll + dσ/dt` — and nothing is ever
+revealed there. New pattern arrives only at the entry edge, `u = 0`, which is what the eye reads as
+sliding. Opening a window onto a pattern that never moved is what made this read as a wipe: the
+boundary moved and nothing behind it did. The entry edge sits at element position `mod(dir·phase, L)`,
+so it follows the pattern instead of staying nailed to one end, and a held curve leaves the whole
+thing circling. `Center Out` is the same construction twice, split at `u = L/2`, with each half
+displaced `∓animSigned·L/2` so the two part from a middle that travels too.
+
+For **Stack** it is what stops groups popping. A group's slot is
+`floor(mod(nominalStart(g), axisLength) / period)` — read from where the group sits in the *pattern*,
+not from where it currently is on the element, so it is fixed for the whole render however far things
+have scrolled. A part-built stack is then a rigid set of groups that travels round as one piece, and
+because the wrap is at the *element* length rather than at a whole number of groups, the lit stretch
+is exactly periodic in the element and the part leaving one end is picked up by the part arriving at
+the other with no step in between. The earlier version took the slot from the group's live position,
+so with Speed above zero groups drifted across the fill threshold and blinked in and out.
+
+The nominal start is used rather than `GroupStart` because the randomizer and the ripples move a group
+about, and a group whose slot flickered as a ripple went past would drop out of the stack and back in.
+
+Two consequences worth knowing. The landing count `orderCount` is a whole number of slots, which is
+what lets a completed stack land exactly on "everything lit" instead of a hair short of it — with a
+fractional count the last landing was still part way through its flight at curve 50 and snapped home.
+And the arriving group's lookup is rejected if it would run off the end of the element: slots repeat
+every element, so without that check the lookup finds the *next* copy of the pattern round and draws a
+ghost of the arriving group parked at its destination before the real one has set off.
+
+### Motion blur is a real exposure
+
+`Motion Blur` renders the frame at several sub-frame instants and averages them, rather than smearing
+the finished frame. `BuildFrameStates` evaluates the curves once per frame and stores one `FrameState`
+per sample — scroll position, ripple phase, animation position, brightness — and `RenderPixelExposed`
+runs the ordinary pixel maths against each and averages.
+
+The samples are spread evenly across the shutter and **centred on the frame**, so opening the shutter
+grows the blur out either side instead of dragging the whole effect late. The average is over every
+sample, not just the lit ones: a bulb dark for part of the exposure genuinely put less light on the
+film, and it is that dimming — a group's leading edge arriving part way through the frame and so
+arriving dim — that reads as a smear rather than as a group that has simply grown wider.
+
+Sample count scales with the angle, up to 16 at 360°, so the cost tracks how much blur was asked for.
+Because it is a real exposure it blurs the scroll and the ripples too, which is normally what is
+wanted and is why a blurred render is never byte-identical to an unblurred one.
 
 Mid-animation the no-merge guarantee is legitimately suspended — `Center Out` collapsing to the middle
 is groups overlapping on purpose. It holds at the neutral point, which is what the tests assert.
@@ -303,10 +374,27 @@ instead of single bulbs.
   The staircase does, and it needs two controls instead of three.
 - The ripple travels up the group index. If it reads the wrong way round on a prop it is a sign flip
   on the `placeInQueue` term in `GroupRipple()`.
-- **Stack** orders groups by where they sit on the element, so with Speed above 0 a group can drift
-  across the fill threshold while the animation is mid-flight and pop in or out. It is exact at Speed 0,
-  which is the natural way to use a stack. Ordering by group identity (`g mod N`) instead would be
-  stable per group but would put one discontinuity somewhere in the chain.
+- **Slide** used to leave the pattern where it was and open an arc of the element up to it. That reads as
+  a wipe, not a slide — the boundary moved and nothing behind it did — and with Speed at 0 the arc
+  wrapped and grew from the *wrong* end. It now displaces the pattern itself. The trade-off is that the
+  arc's old "never add pattern back over where it already is" property is now a consequence of the two
+  edges moving together rather than something enforced directly.
+- **Stack** used to order groups by where they sat on the element, so with Speed above 0 a group could
+  drift across the fill threshold mid-animation and pop in or out; it was only exact at Speed 0. Slots
+  now come from the group's place in the pattern, wrapped at the element length. `g mod N` would also
+  have been stable per group but puts a discontinuity in the chain wherever the pattern does not tile
+  the element exactly; wrapping on the element length instead is what keeps the join seamless.
+- The landing count is rounded to a whole number of slots. On a prop that holds, say, 12.4 groups the
+  last slot is a partial one, so its landing adds a group only some of the time — the alternative,
+  rounding up, adds a landing that sometimes brings nothing at all and reads as a dropped beat. **Fit
+  To Element** makes the count exact and is worth turning on for a stack.
+- **Motion Blur**'s sample count is capped at 16. A group flying the length of a large prop inside one
+  frame can still band into separate copies at that ceiling; the honest fix is a count driven by the
+  measured per-frame travel rather than by the shutter angle alone, which is a bigger change than it
+  sounds because the stack's flight speed jumps each time a group lands.
+- Motion Blur is offered on Slide and Stack only. Dissolve and Scale change brightness rather than
+  position, so there is nothing travelling for a shutter to smear; the plain scroll would blur happily
+  enough if it were ever wanted there.
 - **Animate From**'s names suit a horizontal movement axis; on a vertical Direction they read as top
   and bottom. Renaming to Start/End would be accurate for both but less obvious for the common case.
 - A centre stack's two sides set off from just inside their own halves rather than from the exact
