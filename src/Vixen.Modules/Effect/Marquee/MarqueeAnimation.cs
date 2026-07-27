@@ -29,6 +29,7 @@ namespace VixenModules.Effect.Marquee
 	/// Which end of the movement axis an animation arrives from. The far end is automatically where it
 	/// leaves, so the two halves of the Animation curve are different animations rather than mirror
 	/// images. Named for a horizontal movement axis; on a vertical one they read as top and bottom.
+	/// There is no ends-inward member because reversing the curve gives exactly that.
 	/// </summary>
 	public enum MarqueeAnimationFrom
 	{
@@ -39,9 +40,18 @@ namespace VixenModules.Effect.Marquee
 		Right,
 
 		[Description("From Center Out")]
-		CenterOut,
+		CenterOut
+	}
 
-		[Description("From Ends In")]
-		EndsIn
+	/// <summary>
+	/// In what order groups land when a stack starts from the centre.
+	/// </summary>
+	public enum MarqueeCenterOrder
+	{
+		[Description("Both Sides At Once")]
+		BothSides,
+
+		[Description("Alternate Sides")]
+		Alternate
 	}
 }

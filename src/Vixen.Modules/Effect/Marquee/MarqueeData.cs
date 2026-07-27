@@ -40,6 +40,9 @@ namespace VixenModules.Effect.Marquee
 			Animation = MarqueeAnimation.None;
 			AnimationCurve = new Curve(new PointPairList(new[] { 0.0, 100.0 }, new[] { 50.0, 50.0 }));
 			AnimationFrom = MarqueeAnimationFrom.Left;
+			// A straight ramp, so a group slides in at a steady rate until the user shapes it.
+			StackCurve = new Curve(new PointPairList(new[] { 0.0, 100.0 }, new[] { 0.0, 100.0 }));
+			CenterOrder = MarqueeCenterOrder.BothSides;
 			// No blown bulbs. The seed only matters once there are some.
 			BadBulbs = 0;
 			BadBulbSeed = 1;
@@ -110,6 +113,17 @@ namespace VixenModules.Effect.Marquee
 		[DataMember]
 		public MarqueeAnimationFrom AnimationFrom { get; set; }
 
+		/// <summary>
+		/// Shapes how a group travels as it slides into its slot in a stack: 0 is the moment it sets off
+		/// and 100 the moment it lands.
+		/// </summary>
+		[DataMember]
+		public Curve StackCurve { get; set; }
+
+		/// <summary>In what order groups land when a stack starts from the centre.</summary>
+		[DataMember]
+		public MarqueeCenterOrder CenterOrder { get; set; }
+
 		/// <summary>How many LEDs on the element are blown and never light. 0 = none.</summary>
 		[DataMember]
 		public int BadBulbs { get; set; }
@@ -155,6 +169,11 @@ namespace VixenModules.Effect.Marquee
 				AnimationCurve = new Curve(new PointPairList(new[] { 0.0, 100.0 }, new[] { 50.0, 50.0 }));
 			}
 
+			if (StackCurve == null)
+			{
+				StackCurve = new Curve(new PointPairList(new[] { 0.0, 100.0 }, new[] { 0.0, 100.0 }));
+			}
+
 			if (BadBulbs < 0)
 			{
 				BadBulbs = 0;
@@ -198,6 +217,8 @@ namespace VixenModules.Effect.Marquee
 				Animation = Animation,
 				AnimationCurve = new Curve(AnimationCurve),
 				AnimationFrom = AnimationFrom,
+				StackCurve = new Curve(StackCurve),
+				CenterOrder = CenterOrder,
 				BadBulbs = BadBulbs,
 				BadBulbSeed = BadBulbSeed,
 				Orientation = Orientation,

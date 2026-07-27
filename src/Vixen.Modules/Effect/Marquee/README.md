@@ -52,6 +52,9 @@ pattern slides in, runs normally, and slides out the far side.
 **A sign warming up** — Animation `Dissolve` with the curve ramping `0 → 50`, plus **Bad Bulbs** at 3–6.
 Groups flicker on in a scattered order and a few never do.
 
+**Assembling itself** — Animation `Stack`, Animate From `Left`, Speed `0`, and a Stack Curve with an
+ease at both ends. Groups fly in one at a time and pile up against the far end with weight.
+
 
 ## Controls
 
@@ -88,7 +91,7 @@ Both Randomness and the ripples need a gap to move in — with **Lights Off = 0*
 and neither does anything. They share one budget (see below); the ripples are served first, so turning
 them on leaves Randomness a little less room.
 
-### Animation
+### Animate In/Out
 
 Animates the pattern on and off from inside the effect. A layered overlay can only multiply
 brightness, so it can never do anything *structural* — it has no idea where the groups are. Anything
@@ -98,7 +101,9 @@ that moves or reveals groups individually has to live here.
 | --- | --- |
 | **Animation** | `None` (default), `Slide`, `Dissolve`, `Stack`, `Scale`. |
 | **Animation Curve** | Drives the animation over the effect's duration. **50 is fully assembled** — see below. |
-| **Animation From** | Which end of the movement axis it arrives from: `Left`, `Right`, `Center Out`, `Ends In`. It leaves by the far end. Only shown for Slide and Stack; Dissolve and Scale have no axis. Named for a horizontal movement axis — on a vertical one they read as top and bottom. |
+| **Animate From** | Which end of the movement axis it arrives from: `Left`, `Right`, `Center Out`. It leaves by the far end. Only shown for Slide and Stack; Dissolve and Scale have no axis. Named for a horizontal movement axis — on a vertical one they read as top and bottom. *(There is no ends‑inward option: reversing the curve gives exactly that.)* |
+| **Stack Curve** | How a group moves as it slides into place — 0 is the moment it sets off, 100 the moment it lands. An eased curve gives the groups weight. Only shown for Stack. |
+| **Center Order** | Whether a centre stack lands `Both Sides At Once` (two per step, symmetric, fills in half the time) or `Alternate Sides` (one at a time, zig‑zagging outward). Only shown for Stack with Animate From at Center. |
 
 **The curve is the whole animation.** Not a duration, not a slider — so it can animate on over the
 first beat, sit still, and leave on the last, any shape, any number of times.
@@ -121,9 +126,9 @@ pattern before you had asked it to do anything.
 
 | Mode | Below 50 | Above 50 |
 | --- | --- | --- |
-| **Slide** | The whole block travels in from the chosen end. All the groups move — this is not a wipe; nothing is revealed in place. | Keeps going and exits the opposite end. `Center Out` / `Ends In` split it into two halves that part and meet in the middle. |
+| **Slide** | An arc of the element opens up to the pattern, growing from nothing to the whole prop. The arc's leading edge **travels with the pattern**, so holding the curve part‑way leaves the pattern circling the prop rather than parked in a dead half — and because the arc carries its entry point round with it, pattern is never added back over where it already is. | Keeps going and closes from the opposite end. `Center Out` grows from the middle on the way in and empties from the middle on the way out. |
 | **Dissolve** | Groups appear in a scattered order, each fading up as its turn arrives. Whole **groups**, never individual LEDs. | Leaves in a *different* scattered order, so an out is not the in retraced. |
-| **Stack** | Groups land one at a time from the chosen end and pile up until full. Whatever has landed **keeps running the main effect** — scroll, ripples, fade and all — so the pattern comes alive as it fills. | Unstacks from the other end. |
+| **Stack** | Groups slide in one at a time from the chosen end and **pile up against the far end**, each stopping a slot short of the last. Whatever has landed **keeps running the main effect** — scroll, ripples, fade and all — so the pattern comes alive as it fills. | Unstacks from the other end. |
 | **Scale** | Each group narrows toward its own centre, so the edges die first. | A hole opens at each group's centre and eats outward, so the middle dies first. Both extremes reach dark by opposite routes. |
 
 ### Color
@@ -240,15 +245,21 @@ LEDs), so the string renderer always computes one line and reuses it across the 
 Deliberately four different layers, chosen so the group maths and the bounds it relies on stay intact
 wherever possible:
 
-- **Slide** moves the *sample coordinate*, not the groups: LED `s` reads the pattern at `s − travel`,
-  and reads outside `[0, axisLength)` are dark. That windowing is the whole trick — the pattern is
-  infinite and periodic, so translating the groups themselves would displace it by whole periods and
-  look like nothing had happened. `GroupStart` and `TryFindGroup` are untouched.
+- **Slide** leaves the pattern exactly where it is and opens an *arc* of the element up to it, sized by
+  the curve and with its leading edge riding along with the pattern. Reading the pattern in place
+  rather than shifting where it is sampled from also avoids a seam: the pattern only tiles the element
+  exactly under Fit To Element, so a wrapped sample coordinate would cut a group in half at the wrap.
 - **Dissolve** is a per-group brightness gate on `Hash01(group)`. Deliberately *not* the Dissolve
   effect's approach: that one reshuffles from a time-seeded generator on every pre-render, so editing
   any unrelated property silently reorders it. `Hash01` is stable across frames *and* re-renders.
-- **Stack** is a per-group arrival gate with exactly one group in transit, which keeps it to a single
-  interval test rather than a widened group search.
+- **Stack** is a per-group arrival gate. The group still on its way in is drawn by looking the pattern
+  up a second time at a shifted coordinate, which moves it a whole element's width if need be while
+  leaving the one-cell search in `TryFindGroup` intact — shifting the position *within* the group
+  instead only ever nudges it a group's width and slices it in half on the way. How far it has left to
+  go is only an estimate, but the shift closes to exactly zero on landing, so a group always settles
+  precisely into its slot however roughly it set off. Note this is the one mode consulted even when the
+  LED falls in a *gap*: a group in transit is displaced off its own slot and covers LEDs the slot does
+  not, so returning early on the gap would leave it invisible until it had already landed.
 - **Scale** gates on `local`, the position within the group, measuring coverage against the part of the
   bank *inside* the group. That last part matters: a scrolling pattern puts banks at fractional offsets
   so one can straddle the group's edge, and dividing by the full bank width leaves the protruding part
@@ -296,8 +307,11 @@ instead of single bulbs.
   across the fill threshold while the animation is mid-flight and pop in or out. It is exact at Speed 0,
   which is the natural way to use a stack. Ordering by group identity (`g mod N`) instead would be
   stable per group but would put one discontinuity somewhere in the chain.
-- **Animation From**'s names suit a horizontal movement axis; on a vertical Direction they read as top
+- **Animate From**'s names suit a horizontal movement axis; on a vertical Direction they read as top
   and bottom. Renaming to Start/End would be accurate for both but less obvious for the common case.
+- A centre stack's two sides set off from just inside their own halves rather than from the exact
+  middle. Starting both on the same point has them occupy the same LED as they cross, which reads as
+  one of the pair blinking out for a frame.
 - Location‑mode direction polarity (Up/Down/Left/Right on a matrix) is worth an
   eyeball; it is a one‑line sign flip if any axis reads backwards.
 - **Fit To Element** measures the movement axis of the render buffer: pixels‑per‑string for
