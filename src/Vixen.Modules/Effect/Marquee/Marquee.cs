@@ -69,6 +69,13 @@ namespace VixenModules.Effect.Marquee
 		/// <summary>Fastest ripple rate in cycles per second.</summary>
 		private const double MaxRippleHz = 6.0;
 
+		/// <summary>
+		/// How many sub-frame samples a fully open (360 degree) shutter is smeared over. The samples are
+		/// what the blur is made of, so too few band the smear into separate copies; the count scales down
+		/// with the shutter angle so a narrow shutter does not pay for samples it cannot show.
+		/// </summary>
+		private const int MaxMotionBlurSamples = 16;
+
 		#endregion
 
 		#region Private Fields
@@ -152,10 +159,55 @@ namespace VixenModules.Effect.Marquee
 		private double _dirSign;
 
 		/// <summary>
+		/// Length of the movement axis in LEDs. Cached because the animations lay themselves out on the
+		/// element as a whole rather than on the pattern, and because it is what they wrap around.
+		/// </summary>
+		private int _axisLength;
+
+		/// <summary>How many group slots fit on the element, which is how many landings fill a stack.</summary>
+		private int _stackSlots;
+
+		/// <summary>
+		/// Fraction of a frame the shutter is open, from the Motion Blur angle. Zero closes it, which
+		/// short-circuits the whole sub-frame path.
+		/// </summary>
+		private double _shutter;
+
+		/// <summary>
+		/// The sub-frame states the current frame is smeared over: one entry with a closed shutter, more as
+		/// it opens. Rebuilt once per frame so the curves are evaluated per frame rather than per pixel.
+		/// </summary>
+		private FrameState[] _frameStates;
+		private int _frameStateCount;
+
+		/// <summary>
 		/// Lookup table of the fade envelope (0..1) sampled across a lit group.  Avoids evaluating the curve per pixel.
 		/// </summary>
 		private double[] _fadeLut;
 		private int _lutSize;
+
+		#endregion
+
+		#region Nested Types
+
+		/// <summary>
+		/// Everything about a single instant that the pixel maths reads: where the pattern has scrolled to,
+		/// how far through the ripples and the animation it is, and how bright the effect is overall.
+		/// </summary>
+		/// <remarks>
+		/// A frame is one of these with the shutter closed and several spread across it when it is open, so
+		/// motion blur is just rendering the same pixel against each of them and averaging. Keeping them in
+		/// a struct is what lets the curves be sampled once per frame instead of once per pixel per sample.
+		/// </remarks>
+		private struct FrameState
+		{
+			public double Phase;
+			public double RipplePhase;
+			public double AnimSigned;
+			public double AnimAmount;
+			public bool AnimActive;
+			public double Level;
+		}
 
 		#endregion
 
@@ -545,6 +597,31 @@ namespace VixenModules.Effect.Marquee
 			}
 		}
 
+		/// <summary>
+		/// Gets or sets the shutter angle in degrees, read exactly as on a film camera: 0 is a closed
+		/// shutter and a hard, strobed edge, 180 the usual cinema look, 360 a shutter open for the whole
+		/// frame so the smear from one frame meets the next with no gap.
+		/// </summary>
+		[Value]
+		[ProviderCategory(@"Animate In/Out", 2)]
+		[ProviderDisplayName(@"Motion Blur")]
+		[ProviderDescription(@"Shutter angle.  0 is no blur, 180 the usual film look, 360 a fully open shutter.")]
+		[PropertyEditor("SliderEditor")]
+		[NumberRange(0, 360, 1)]
+		[PropertyOrder(5)]
+		public int MotionBlur
+		{
+			get { return _data.MotionBlur; }
+			set
+			{
+				if (value < 0) value = 0;
+				else if (value > 360) value = 360;
+				_data.MotionBlur = value;
+				IsDirty = true;
+				OnPropertyChanged();
+			}
+		}
+
 		#endregion
 
 		#region Color properties
@@ -653,6 +730,7 @@ namespace VixenModules.Effect.Marquee
 			// Determine which axis the pattern travels along and in which direction.
 			_moveAlongX = Direction == MarqueeDirection.Left || Direction == MarqueeDirection.Right;
 			_dirSign = (Direction == MarqueeDirection.Right || Direction == MarqueeDirection.Down) ? 1.0 : -1.0;
+			_axisLength = Math.Max(1, _moveAlongX ? BufferWi : BufferHt);
 
 			// Width of one bank of LEDs that lights and steps together (clamped to the lit group width).
 			_fadeGroup = Math.Min(Math.Max(1, FadeGroup), _onCount);
@@ -676,8 +754,7 @@ namespace VixenModules.Effect.Marquee
 				// bank grid allows: the pitch may be a fractional number of banks, which is what stops a
 				// rounding error accumulating along the element.  The result is never shorter than the
 				// requested Lights On + Lights Off, so Lights Off still acts as a minimum gap.
-				int axisLength = _moveAlongX ? BufferWi : BufferHt;
-				double axisBanks = Math.Floor(axisLength / _fadeGroup);
+				double axisBanks = Math.Floor(_axisLength / _fadeGroup);
 				double repeats = Math.Floor(axisBanks / _periodBanks);
 				if (repeats >= 1)
 				{
@@ -687,10 +764,14 @@ namespace VixenModules.Effect.Marquee
 
 			_period = _periodBanks * _fadeGroup;
 
+			// How many groups the element holds, which is how many landings it takes to fill a stack.  It has
+			// to be a whole number: a fractional count would leave the last landing adding a sliver of a group
+			// and, worse, would stop a fully assembled stack landing exactly on "everything lit".
+			_stackSlots = _period > 0.0 ? Math.Max(1, (int)Math.Floor(_axisLength / _period + 0.5)) : 1;
+
 			// Ripples are spread over the element, so the count is what the eye sees travelling along it
 			// however long the prop is: one ripple sweeps end to end, four chase each other.
-			int rippleAxisLength = _moveAlongX ? BufferWi : BufferHt;
-			double totalGroups = _period > 0.0 ? rippleAxisLength / _period : 1.0;
+			double totalGroups = _period > 0.0 ? _axisLength / _period : 1.0;
 			_rippleGroups = Math.Max(1.0, totalGroups / Math.Max(1, Ripples));
 			_rippleHz = RippleSpeed <= 0
 				? 0.0
@@ -721,6 +802,17 @@ namespace VixenModules.Effect.Marquee
 
 			BuildBadBulbs();
 
+			// The shutter is only offered on the two animations that carry something across the element;
+			// nothing else has motion of its own for it to smear, and leaving it out of those keeps them
+			// rendering exactly as they always have.
+			bool canBlur = Animation == MarqueeAnimation.Slide || Animation == MarqueeAnimation.Stack;
+			_shutter = canBlur ? Math.Min(360, Math.Max(0, MotionBlur)) / 360.0 : 0.0;
+			int blurSamples = _shutter <= 0.0
+				? 1
+				: 1 + (int)Math.Ceiling(_shutter * (MaxMotionBlurSamples - 1));
+			_frameStates = new FrameState[blurSamples];
+			_frameStateCount = blurSamples;
+
 			// Pre-sample the fade curve into a lookup table.
 			_lutSize = 257;
 			_fadeLut = new double[_lutSize];
@@ -740,6 +832,7 @@ namespace VixenModules.Effect.Marquee
 		{
 			_fadeLut = null;
 			_badBulbs = null;
+			_frameStates = null;
 		}
 
 		/// <summary>
@@ -796,9 +889,7 @@ namespace VixenModules.Effect.Marquee
 		/// <param name="frameBuffer">Frame buffer to render in</param>
 		protected override void RenderEffect(int frame, IPixelFrameBuffer frameBuffer)
 		{
-			UpdatePhase(frame);
-
-			double level = LevelCurve.GetValue(GetEffectTimeIntervalPosition(frame) * 100.0) / 100.0;
+			BuildFrameStates(frame);
 
 			int width = BufferWi;
 			int height = BufferHt;
@@ -810,7 +901,7 @@ namespace VixenModules.Effect.Marquee
 			Color[] line = new Color[axisLength];
 			for (int s = 0; s < axisLength; s++)
 			{
-				line[s] = RenderPixel(s, axisLength, level);
+				line[s] = RenderPixelExposed(s, axisLength);
 			}
 
 			// Blown bulbs are the one thing that does vary across the perpendicular axis, so they cannot
@@ -856,9 +947,8 @@ namespace VixenModules.Effect.Marquee
 			for (int frame = 0; frame < numFrames; frame++)
 			{
 				frameBuffer.CurrentFrame = frame;
-				UpdatePhase(frame);
+				BuildFrameStates(frame);
 
-				double level = LevelCurve.GetValue(GetEffectTimeIntervalPosition(frame) * 100.0) / 100.0;
 				int axisLength = _moveAlongX ? BufferWi : BufferHt;
 
 				foreach (ElementLocation location in frameBuffer.ElementLocations)
@@ -870,7 +960,7 @@ namespace VixenModules.Effect.Marquee
 					if (IsBadBulb(zx, zy)) continue;
 
 					double s = _moveAlongX ? zx : zy;
-					Color c = RenderPixel(s, axisLength, level);
+					Color c = RenderPixelExposed(s, axisLength);
 					if (c.A != 0)
 					{
 						frameBuffer.SetPixel(location.X, location.Y, c);
@@ -884,14 +974,21 @@ namespace VixenModules.Effect.Marquee
 		#region Private Methods
 
 		/// <summary>
-		/// Advances the scroll position and the ripples for the specified frame.
+		/// Advances the scroll position and works out the sub-frame instants the specified frame is made of.
 		/// </summary>
+		/// <remarks>
+		/// With the shutter closed there is exactly one instant, the frame itself, and the render is the
+		/// same one it always was. Opening the shutter spreads the samples evenly across it and centres them
+		/// on the frame, so the blur grows out either side rather than dragging the whole effect late.
+		///
+		/// The curves are read here, once per frame, rather than inside the pixel loop: a blurred render
+		/// then costs extra pixel maths but no extra curve evaluation, which is the expensive half.
+		/// </remarks>
 		/// <param name="frame">Current frame number</param>
-		private void UpdatePhase(int frame)
+		private void BuildFrameStates(int frame)
 		{
-			// The ripples run at a constant rate, so their count is computed straight from the frame
-			// number rather than accumulated -- no drift, and it needs no reset between target nodes.
-			_ripplePhase = frame * (FrameTime / 1000.0) * _rippleHz;
+			double frameSeconds = FrameTime / 1000.0;
+			double ledsPerSecond = SpeedToLedsPerSecond(SpeedCurve.GetValue(SubFramePosition(frame) * 100.0));
 
 			if (frame == 0)
 			{
@@ -901,35 +998,95 @@ namespace VixenModules.Effect.Marquee
 			}
 			else
 			{
-				double intervalPos = GetEffectTimeIntervalPosition(frame) * 100.0;
-				double ledsPerSecond = SpeedToLedsPerSecond(SpeedCurve.GetValue(intervalPos));
-				_scrollPhase += ledsPerSecond * (FrameTime / 1000.0);
+				_scrollPhase += ledsPerSecond * frameSeconds;
 			}
 
-			// Every ripple shoves every group it passes forward by a step, so on average the ripples carry
-			// the whole pattern along at one step per ripple.  That average is real movement and belongs in
-			// the scroll; what is left over per group -- whether it has been shoved yet or is still waiting
-			// -- is the stagger, and lives in GroupRipple.  Splitting it this way is what lets a group sit
-			// genuinely still between shoves rather than drifting through the pause.
-			_phase = _scrollPhase + _rippleStep * _ripplePhase;
-
-			// Remap the animation curve so 0 is assembled.  Exactly 50 has to land on exactly 0 or the
-			// neutral position would not be neutral and simply picking an animation would nudge the
-			// pattern.
-			if (Animation == MarqueeAnimation.None)
+			for (int i = 0; i < _frameStateCount; i++)
 			{
-				_animSigned = 0.0;
-				_animAmount = 0.0;
-				_animActive = false;
-				return;
+				// Where in the frame this sample sits, in frames.  A closed shutter lands dead on the frame.
+				double offset = _frameStateCount == 1
+					? 0.0
+					: _shutter * ((double)i / (_frameStateCount - 1) - 0.5);
+				double position = SubFramePosition(frame + offset);
+
+				FrameState state;
+
+				// The ripples run at a constant rate, so their count is computed straight from the frame
+				// number rather than accumulated -- no drift, and it needs no reset between target nodes.
+				state.RipplePhase = (frame + offset) * frameSeconds * _rippleHz;
+
+				// Every ripple shoves every group it passes forward by a step, so on average the ripples carry
+				// the whole pattern along at one step per ripple.  That average is real movement and belongs in
+				// the scroll; what is left over per group -- whether it has been shoved yet or is still waiting
+				// -- is the stagger, and lives in GroupRipple.  Splitting it this way is what lets a group sit
+				// genuinely still between shoves rather than drifting through the pause.
+				//
+				// Speed is taken as constant within the frame, which it is to well inside a frame's worth of
+				// travel.
+				state.Phase = _scrollPhase + ledsPerSecond * offset * frameSeconds + _rippleStep * state.RipplePhase;
+				state.Level = LevelCurve.GetValue(position * 100.0) / 100.0;
+
+				// Remap the animation curve so 0 is assembled.  Exactly 50 has to land on exactly 0 or the
+				// neutral position would not be neutral and simply picking an animation would nudge the
+				// pattern.
+				if (Animation == MarqueeAnimation.None)
+				{
+					state.AnimSigned = 0.0;
+					state.AnimAmount = 0.0;
+					state.AnimActive = false;
+				}
+				else
+				{
+					double signed = (AnimationCurve.GetValue(position * 100.0) - 50.0) / 50.0;
+					if (signed < -1.0) signed = -1.0;
+					else if (signed > 1.0) signed = 1.0;
+					state.AnimSigned = signed;
+					state.AnimAmount = Math.Abs(signed);
+					state.AnimActive = state.AnimAmount > 0.0;
+				}
+
+				_frameStates[i] = state;
 			}
 
-			double curve = AnimationCurve.GetValue(GetEffectTimeIntervalPosition(frame) * 100.0);
-			_animSigned = (curve - 50.0) / 50.0;
-			if (_animSigned < -1.0) _animSigned = -1.0;
-			else if (_animSigned > 1.0) _animSigned = 1.0;
-			_animAmount = Math.Abs(_animSigned);
-			_animActive = _animAmount > 0.0;
+			// Leave the fields on the first sample so the un-blurred path can render straight off them.
+			UseState(0);
+		}
+
+		/// <summary>
+		/// Points the pixel maths at one of the frame's sub-frame instants.
+		/// </summary>
+		/// <param name="index">Index into the frame's sample list</param>
+		private void UseState(int index)
+		{
+			FrameState state = _frameStates[index];
+			_phase = state.Phase;
+			_ripplePhase = state.RipplePhase;
+			_animSigned = state.AnimSigned;
+			_animAmount = state.AnimAmount;
+			_animActive = state.AnimActive;
+		}
+
+		/// <summary>
+		/// Where a fractional frame sits in the effect, 0 to 1.
+		/// </summary>
+		/// <remarks>
+		/// The base class only offers whole frames, and the shutter's samples fall between them. Clamping
+		/// holds the end values for samples that spill off either end of the effect; on a whole frame this
+		/// returns exactly what the base class does.
+		/// </remarks>
+		/// <param name="frame">Frame number, which may be fractional</param>
+		/// <returns>Position through the effect, 0 to 1</returns>
+		private double SubFramePosition(double frame)
+		{
+			if (TimeSpan == TimeSpan.Zero)
+			{
+				return 0.0;
+			}
+
+			double position = frame * FrameTime / TimeSpan.TotalMilliseconds;
+			if (position < 0.0) position = 0.0;
+			else if (position > 1.0) position = 1.0;
+			return position;
 		}
 
 		/// <summary>
@@ -1073,6 +1230,63 @@ namespace VixenModules.Effect.Marquee
 		}
 
 		/// <summary>
+		/// Computes the color for a pixel across the whole of the frame's exposure.
+		/// </summary>
+		/// <remarks>
+		/// With the shutter closed this is one look at one instant and costs nothing extra. Open it and the
+		/// pixel is rendered against each sub-frame instant and the results averaged, which is what motion
+		/// blur physically is: light collected while things moved.
+		///
+		/// The average is over *every* sample, not only the lit ones. A bulb that was dark for part of the
+		/// exposure genuinely put less light on the film, and it is that dimming - a group's leading edge
+		/// arriving part way through the frame and so arriving dim - that reads as the smear rather than as
+		/// a group that has simply grown wider.
+		/// </remarks>
+		/// <param name="s">Coordinate of the pixel along the movement axis (zero based)</param>
+		/// <param name="axisLength">Length of the movement axis</param>
+		/// <returns>The color for the pixel, or transparent if it was dark for the whole exposure</returns>
+		private Color RenderPixelExposed(double s, int axisLength)
+		{
+			if (_frameStateCount == 1)
+			{
+				return RenderPixel(s, axisLength, _frameStates[0].Level);
+			}
+
+			double red = 0.0, green = 0.0, blue = 0.0;
+			bool anyLit = false;
+
+			for (int i = 0; i < _frameStateCount; i++)
+			{
+				UseState(i);
+				Color sample = RenderPixel(s, axisLength, _frameStates[i].Level);
+				if (sample.A == 0) continue;
+
+				red += sample.R;
+				green += sample.G;
+				blue += sample.B;
+				anyLit = true;
+			}
+
+			if (!anyLit)
+			{
+				return Color.Transparent;
+			}
+
+			double scale = 1.0 / _frameStateCount;
+			return Color.FromArgb(255, ToByte(red * scale), ToByte(green * scale), ToByte(blue * scale));
+		}
+
+		/// <summary>
+		/// Rounds a 0..255 channel value to a byte, clamped.
+		/// </summary>
+		private static int ToByte(double value)
+		{
+			int result = (int)(value + 0.5);
+			if (result < 0) return 0;
+			return result > 255 ? 255 : result;
+		}
+
+		/// <summary>
 		/// Computes the rendered color for a single pixel.  Returns <see cref="Color.Transparent"/> when the pixel is
 		/// in a gap (off).
 		/// </summary>
@@ -1082,18 +1296,22 @@ namespace VixenModules.Effect.Marquee
 		/// <returns>The color for the pixel, or transparent if it is off</returns>
 		private Color RenderPixel(double s, int axisLength, double level)
 		{
-			// Slide opens up an arc of the element to the pattern rather than moving the pattern, which
-			// leaves the group maths and every bound it relies on completely alone.
-			if (_animActive && Animation == MarqueeAnimation.Slide && !IsWithinSlide(s, axisLength))
+			// The element is divided into fixed banks of the step size and the whole bank is treated as one
+			// lamp, so every LED in it shares a brightness and switches with it.  An LED covers [s, s+1), so
+			// the bank containing it spans [b, b+step) and its centre is half a step in.  The bank rather
+			// than the raw coordinate is what the slide is measured against too, so its edge never cuts a
+			// bank in half.
+			double bankCentre = (Math.Floor(s / _fadeGroup) + 0.5) * _fadeGroup;
+
+			// Slide carries the pattern onto the element and shows only the stretch it has reached so far.
+			double slide = 0.0;
+			if (_animActive && Animation == MarqueeAnimation.Slide && !TrySlide(bankCentre, axisLength, out slide))
 			{
 				// The pattern has not reached this LED yet, or has already left it.
 				return Color.Transparent;
 			}
 
-			// The element is divided into fixed banks of the step size and the whole bank is treated as one
-			// lamp, so every LED in it shares a brightness and switches with it.  An LED covers [s, s+1), so
-			// the bank containing it spans [b, b+step) and its centre is half a step in.
-			double centre = (Math.Floor(s / _fadeGroup) + 0.5) * _fadeGroup - _dirSign * _phase;
+			double centre = bankCentre - slide - _dirSign * _phase;
 
 			long group;
 			double c;
@@ -1107,7 +1325,7 @@ namespace VixenModules.Effect.Marquee
 				// Asked even where the LED falls in a gap.  The group sliding in is displaced from its own
 				// slot, so it covers LEDs that its slot does not - returning early on the gap would mean it
 				// was only ever visible once it had already landed.
-				animGate = StackGate(onGroup, centre, axisLength, ref group, ref c);
+				animGate = StackGate(onGroup, centre, ref group, ref c);
 			}
 			else if (!onGroup)
 			{
@@ -1161,56 +1379,60 @@ namespace VixenModules.Effect.Marquee
 		#region Animation
 
 		/// <summary>
-		/// Whether a sliding LED is inside the arc of the element the pattern has reached.
+		/// Whether a bank is inside the sliding pattern, and how far the pattern has been carried from its
+		/// assembled position to get there.
 		/// </summary>
 		/// <remarks>
-		/// The pattern is left exactly where it is and an arc of the element is opened up to it, growing
-		/// from nothing at the extremes to the whole element at 50. The arc's leading edge travels with
-		/// the pattern, so a part-finished slide keeps circling the element rather than sitting in a dead
-		/// half with the pattern cut off at a fixed line - and because the arc carries its own entry point
-		/// around with it, the pattern is never added back on top of where it already is.
+		/// The pattern really does slide: it is a sheet an element long that is displaced right off the
+		/// element at the extremes of the curve and sits exactly over it at 50, and only the part of the
+		/// sheet actually on the element is drawn. Opening a window onto a pattern that never moved is what
+		/// made this read as a wipe rather than a slide - the boundary moved but nothing behind it did.
 		///
-		/// Reading the pattern in place rather than shifting where it is sampled from also avoids a seam:
-		/// the pattern only tiles the element exactly under Fit To Element, so a wrapped sample coordinate
-		/// would otherwise cut a group in half at the wrap point.
+		/// All of it is measured in a frame that travels with the pattern (<c>u</c> below), which is what
+		/// makes the two lock together. The window's far edge then moves at exactly the speed of the
+		/// pattern's leading edge, so nothing is ever revealed there; new pattern arrives only at the entry
+		/// edge, which is the whole difference between a slide and a wipe. It also means a curve held part
+		/// way leaves the visible stretch circling the element with the pattern instead of parked in a dead
+		/// half, and that the entry point follows along rather than staying pinned to one end of the prop.
+		///
+		/// <see cref="MarqueeAnimationFrom.CenterOut"/> is the same thing done twice: the sheet is torn at
+		/// the middle and the two halves slide out to their own ends, so the pattern still arrives by
+		/// moving. Above 50 they carry straight on and leave by those ends, emptying the middle first.
 		/// </remarks>
-		/// <param name="s">Coordinate of the pixel along the movement axis (zero based)</param>
+		/// <param name="bankCentre">Centre of the bank along the movement axis (zero based)</param>
 		/// <param name="axisLength">Length of the movement axis</param>
-		/// <returns>True when the pattern has reached this LED</returns>
-		private bool IsWithinSlide(double s, int axisLength)
+		/// <param name="shift">How far the pattern is displaced from assembled, in LEDs; 0 when it has landed</param>
+		/// <returns>True when the sliding pattern covers this bank</returns>
+		private bool TrySlide(double bankCentre, int axisLength, out double shift)
 		{
-			double arc = (1.0 - _animAmount) * axisLength;
-			if (arc <= 0.0) return false;
-			if (arc >= axisLength) return true;
+			double length = axisLength;
 
-			// Leaving goes out of the opposite end, so the two halves of the curve are different journeys
-			// rather than one retraced.
-			MarqueeAnimationFrom from = AnimationFrom;
-			if (_animSigned > 0.0)
+			// Position in the frame that travels with the pattern.  The seam at 0 is where the pattern
+			// enters, and it drifts along the element with the scroll.
+			double u = Mod(bankCentre - _dirSign * _phase, length);
+
+			if (AnimationFrom == MarqueeAnimationFrom.CenterOut)
 			{
-				if (from == MarqueeAnimationFrom.Left) from = MarqueeAnimationFrom.Right;
-				else if (from == MarqueeAnimationFrom.Right) from = MarqueeAnimationFrom.Left;
+				double half = length / 2.0;
+
+				// Each half is displaced away from the middle and only shows where it has reached.  Splitting
+				// on the middle rather than on the two halves' own extents matters while they are bunched
+				// together at the start, when both would otherwise claim the same LEDs.
+				if (u < half)
+				{
+					shift = -_animSigned * half;
+					return u >= shift && u < half + shift;
+				}
+
+				shift = _animSigned * half;
+				return u >= half + shift && u < length + shift;
 			}
 
-			if (from == MarqueeAnimationFrom.CenterOut)
-			{
-				double middle = (axisLength - 1) / 2.0;
-
-				// Growing out from the middle on the way in; on the way out the arc sits at the two ends
-				// instead, so the middle empties first and the journey is not simply reversed.
-				return _animSigned > 0.0
-					? Math.Abs(s - middle) >= (axisLength - arc) / 2.0
-					: Math.Abs(s - middle) <= arc / 2.0;
-			}
-
-			// The head rides along with the pattern, so the arc keeps travelling round the element even
-			// while the curve is held still.
-			double head = Mod(_dirSign * _phase, axisLength);
-			double behindHead = from == MarqueeAnimationFrom.Right
-				? Mod(s - head, axisLength)
-				: Mod(head - s, axisLength);
-
-			return behindHead < arc;
+			// Arriving from the right is the mirror of arriving from the left, and above 50 the sheet simply
+			// carries on the same way and leaves by the far end - so one signed displacement covers all four
+			// journeys.
+			shift = (AnimationFrom == MarqueeAnimationFrom.Right ? -1.0 : 1.0) * _animSigned * length;
+			return u >= shift && u < length + shift;
 		}
 
 		/// <summary>
@@ -1244,6 +1466,34 @@ namespace VixenModules.Effect.Marquee
 		}
 
 		/// <summary>
+		/// Which slot on the element a group belongs to, counted from the low end.
+		/// </summary>
+		/// <remarks>
+		/// Read from where the group sits in the *pattern* rather than from where it currently is on the
+		/// element, so it is fixed for the life of the render. That is what makes a part-filled stack hold
+		/// together once Speed is above zero: whatever has landed stays landed and the whole stack simply
+		/// travels along with the pattern instead of groups crossing a fixed threshold and popping in and
+		/// out of it.
+		///
+		/// The nominal position is used rather than <see cref="GroupStart"/> for the same reason - the
+		/// randomizer and the ripples move a group about, and a group whose slot flickered as a ripple went
+		/// past would drop out of the stack and back in.
+		///
+		/// Wrapping at the element length rather than at a whole number of groups is what keeps that travel
+		/// seamless: the landed stretch is then exactly periodic in the element, so the part of it leaving
+		/// one end is picked up by the part arriving at the other with no step in between.
+		/// </remarks>
+		/// <param name="group">Index of the group within the scrolling pattern</param>
+		/// <returns>Slot index, 0 to <see cref="_stackSlots"/> - 1</returns>
+		private int StackSlot(long group)
+		{
+			double nominal = Math.Floor(group * _periodBanks + 0.5) * _fadeGroup;
+			int slot = (int)(Mod(nominal, _axisLength) / _period);
+			if (slot < 0) return 0;
+			return slot > _stackSlots - 1 ? _stackSlots - 1 : slot;
+		}
+
+		/// <summary>
 		/// Where a group sits in the landing queue, counting from wherever the stack starts.
 		/// </summary>
 		/// <remarks>
@@ -1252,31 +1502,43 @@ namespace VixenModules.Effect.Marquee
 		/// to cross the ones already landed - which would otherwise have it passing straight through them.
 		/// </remarks>
 		/// <param name="group">Index of the group within the scrolling pattern</param>
-		/// <param name="slots">How many group slots fit on the element</param>
 		/// <param name="orderCount">How many landings it takes to fill the element</param>
 		/// <param name="reversed">True when the stack is unstacking, which empties from the other end</param>
 		/// <param name="side">-1 or +1 for which side of the middle a centre stack lands on; 0 otherwise</param>
-		/// <returns>Place in the queue, 0 being the first to land, or -1 when the group is off the element</returns>
-		private double StackOrder(long group, double slots, double orderCount, bool reversed, out double side)
+		/// <returns>Place in the queue, 0 being the first to land</returns>
+		private double StackOrder(long group, int orderCount, bool reversed, out double side)
 		{
 			side = 0.0;
 
-			double groupPos = GroupStart(group) + _dirSign * _phase;
-			double slot = Math.Floor(groupPos / _period);
-			if (slot < 0.0 || slot >= slots) return -1.0;
-
+			int slot = StackSlot(group);
 			double order;
 
 			if (AnimationFrom == MarqueeAnimationFrom.CenterOut)
 			{
-				double middleSlot = (slots - 1.0) / 2.0;
+				double middleSlot = (_stackSlots - 1.0) / 2.0;
 				double outward = slot - middleSlot;
 				side = outward >= 0.0 ? 1.0 : -1.0;
 
-				double rings = Math.Floor(Math.Abs(outward));
-				double fromMiddle = CenterOrder == MarqueeCenterOrder.BothSides
-					? rings                                        // both sides land together
-					: rings * 2.0 + (side > 0.0 ? 1.0 : 0.0);      // one at a time, alternating
+				double fromMiddle;
+				if (CenterOrder == MarqueeCenterOrder.BothSides)
+				{
+					// Both sides land together, so a ring counts once however many slots are in it.
+					fromMiddle = Math.Floor(Math.Abs(outward));
+				}
+				else if ((_stackSlots & 1) == 0)
+				{
+					// One at a time, alternating.  An even slot count pairs off exactly either side of the
+					// middle, so the two sides simply interleave.
+					fromMiddle = Math.Floor(Math.Abs(outward)) * 2.0 + (side > 0.0 ? 1.0 : 0.0);
+				}
+				else
+				{
+					// An odd count has one slot sitting exactly on the middle with no partner.  Interleaving
+					// as if it had one would run the queue a place past the last slot and leave two groups
+					// sharing a landing, so the pairing starts one ring out from it instead.
+					double ring = Math.Abs(outward);
+					fromMiddle = ring == 0.0 ? 0.0 : ring * 2.0 - (side > 0.0 ? 0.0 : 1.0);
+				}
 
 				// Coming out of the middle, the outermost ring is the one that fills first.
 				order = orderCount - 1.0 - fromMiddle;
@@ -1284,8 +1546,11 @@ namespace VixenModules.Effect.Marquee
 			else
 			{
 				bool comesInFromLowEnd = AnimationFrom != MarqueeAnimationFrom.Right;
-				order = comesInFromLowEnd ? slots - 1.0 - slot : slot;
+				order = comesInFromLowEnd ? _stackSlots - 1.0 - slot : slot;
 			}
+
+			if (order < 0.0) order = 0.0;
+			else if (order > orderCount - 1.0) order = orderCount - 1.0;
 
 			return reversed ? orderCount - 1.0 - order : order;
 		}
@@ -1306,32 +1571,33 @@ namespace VixenModules.Effect.Marquee
 		/// How far it has left to go is only ever an estimate, but the shift reaches exactly zero when it
 		/// lands, so a group always settles precisely into its slot however roughly it set off.
 		///
-		/// Slots are spatial, so with Speed above zero a group can drift across the fill threshold while
-		/// the animation is mid-flight. Stack is exact with Speed at 0, which is the natural way to use it.
+		/// Slots belong to the pattern rather than to the element (see <see cref="StackSlot"/>), so with
+		/// Speed above zero the part-built stack travels round the element as one piece and keeps running
+		/// the effect while it does, rather than groups drifting across a fixed fill line and popping in and
+		/// out of it. The landing count is a whole number of slots, which is also what lets a completed
+		/// stack land exactly on "everything lit" instead of a hair short of it.
 		/// </remarks>
 		/// <param name="onGroup">True when the un-shifted lookup landed inside a group's own slot</param>
 		/// <param name="centre">Centre of the bank in pattern space</param>
-		/// <param name="axisLength">Length of the movement axis</param>
 		/// <param name="owner">The group found naturally; replaced by the one sliding in when that wins</param>
 		/// <param name="c">Position within the group, replaced for the group sliding in</param>
 		/// <returns>Brightness multiplier for the group</returns>
-		private double StackGate(bool onGroup, double centre, int axisLength, ref long owner, ref double c)
+		private double StackGate(bool onGroup, double centre, ref long owner, ref double c)
 		{
-			double slots = Math.Max(1.0, axisLength / _period);
 			bool reversed = _animSigned > 0.0;   // unstacking starts from the other end
 
 			bool centreStack = AnimationFrom == MarqueeAnimationFrom.CenterOut;
-			double orderCount = centreStack && CenterOrder == MarqueeCenterOrder.BothSides
-				? Math.Ceiling(slots / 2.0)
-				: slots;
+			int orderCount = centreStack && CenterOrder == MarqueeCenterOrder.BothSides
+				? (_stackSlots + 1) / 2
+				: _stackSlots;
 
 			double filled = (1.0 - _animAmount) * orderCount;
 			double landed = Math.Floor(filled);
 
 			if (onGroup)
 			{
-				double order = StackOrder(owner, slots, orderCount, reversed, out _);
-				if (order >= 0.0 && order < landed) return 1.0;
+				double order = StackOrder(owner, orderCount, reversed, out _);
+				if (order < landed) return 1.0;
 			}
 
 			double arriving = filled - landed;
@@ -1365,16 +1631,26 @@ namespace VixenModules.Effect.Marquee
 			bool towardHigher = AnimationFrom != MarqueeAnimationFrom.Right;
 			if (reversed && !centreStack) towardHigher = !towardHigher;
 
+			// Where the bank sits in the frame that travels with the pattern, so the lookup below can be
+			// held inside a single lap of the element.
+			double u = Mod(centre, _axisLength);
+
 			for (int attempt = 0; attempt < (centreStack ? 2 : 1); attempt++)
 			{
 				double shift = travel * (attempt == 0 ? 1.0 : -1.0) * (towardHigher ? 1.0 : -1.0);
+
+				// A lookup that ran off the end of the element would find the next copy of the pattern round
+				// and draw a second, ghost, arriving group parked at the far end before the real one had set
+				// off.  Slots repeat every element, so only the copy inside this lap is the right one.
+				double target = u + shift;
+				if (target < 0.0 || target >= _axisLength) continue;
 
 				long candidate;
 				double candidateOffset;
 				if (!TryFindGroup(centre + shift, out candidate, out candidateOffset)) continue;
 
 				double candidateSide;
-				if (StackOrder(candidate, slots, orderCount, reversed, out candidateSide) != landed) continue;
+				if (StackOrder(candidate, orderCount, reversed, out candidateSide) != landed) continue;
 
 				// On a centre stack each side travels its own way, so ignore the one going the wrong way.
 				if (centreStack && candidateSide != 0.0)
@@ -1541,7 +1817,8 @@ namespace VixenModules.Effect.Marquee
 
 		/// <summary>
 		/// Updates the visibility of the animation attributes. Nothing about the animation matters until one
-		/// is chosen, and the axis only matters for the two that travel along it.
+		/// is chosen, and the axis only matters for the two that travel along it. Motion blur is offered on
+		/// those same two, since they are the ones that carry something across the element for it to smear.
 		/// </summary>
 		/// <param name="refresh">True to refresh the type descriptor after updating visibility</param>
 		private void UpdateAnimationAttributes(bool refresh = true)
@@ -1550,12 +1827,13 @@ namespace VixenModules.Effect.Marquee
 			bool travels = Animation == MarqueeAnimation.Slide || Animation == MarqueeAnimation.Stack;
 			bool stacking = Animation == MarqueeAnimation.Stack;
 
-			Dictionary<string, bool> propertyStates = new Dictionary<string, bool>(4)
+			Dictionary<string, bool> propertyStates = new Dictionary<string, bool>(5)
 			{
 				{ nameof(AnimationCurve), animating },
 				{ nameof(AnimationFrom), animating && travels },
 				{ nameof(StackCurve), stacking },
 				{ nameof(CenterOrder), stacking && AnimationFrom == MarqueeAnimationFrom.CenterOut },
+				{ nameof(MotionBlur), travels },
 			};
 			SetBrowsable(propertyStates);
 			if (refresh)

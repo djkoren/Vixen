@@ -99,14 +99,27 @@ read as designed. This is true of plain Speed movement too and is not specific t
 
 An **Animate In/Out** group (new, `None` by default) animates the pattern on and off from inside the
 effect, which a layered overlay cannot do — an overlay only multiplies brightness and has no idea where
-the groups are. Four modes: `Slide` (an arc of the element opens up to the pattern and travels round
-with it, so a held curve keeps circling rather than parking in a dead half), `Dissolve` (whole groups in
-a scattered order), `Stack` (groups slide in one at a time and pile against the far end, with a Stack
+the groups are. Four modes: `Slide` (the pattern translates onto the prop from the chosen end, a sheet
+an element long displaced right off it at the extremes of the curve), `Dissolve` (whole groups in a
+scattered order), `Stack` (groups slide in one at a time and pile against the far end, with a Stack
 Curve shaping the travel, and whatever has landed keeps running the effect) and `Scale` (each group
 narrows from its edges below 50, hollows from its centre above 50). One curve drives it, with **50
 meaning fully assembled**: below 50 is arriving, above 50 is leaving by the opposite route, so a single
 animator covers both and can do it any shape, anywhere in the effect. At exactly 50 every mode is
-byte-identical to `None`, which is enforced by test rather than merely intended.
+byte-identical to `None`.
+
+Slide and Stack are laid out in a frame that travels with the scroll, so a curve held part way does not
+park them: the stretch that has arrived keeps circling the prop, carrying its entry point round with it,
+and a part-built stack travels as one rigid piece with the rest dropping in behind it whenever the curve
+moves on. For Slide that is also what separates it from a wipe — window and pattern move at identical
+speeds, so pattern is only ever added at the entry edge. For Stack it is what stopped groups popping in
+and out once Speed was above zero. At Speed 0 both are stationary and fill from the end you picked.
+
+**Motion Blur** (new, `0` by default, Slide and Stack only) is a shutter angle in degrees read exactly
+as on a film camera — 0 closed, 180 the usual cinema look, 360 open for the whole frame. It is a real
+exposure, not a smudge: the frame is rendered at up to 16 sub-frame instants and averaged, so a group
+flying into a stack streaks rather than stepping. Because it is an exposure it blurs the ordinary scroll
+and the ripples too, which is why a blurred render is never byte-identical to an unblurred one.
 
 **Bad Bulbs** (new, 0 by default) blows a given number of LEDs on the element so they never light, like
 an old sign. A seed picks which — no other Vixen effect exposes one, and it is deliberate: it stops the
