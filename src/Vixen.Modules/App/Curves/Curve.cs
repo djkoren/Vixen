@@ -11,7 +11,7 @@ namespace VixenModules.App.Curves
 	[Serializable]
 	[KnownType(typeof(BezierHandleData))]
 	[TypeConverter(typeof(CurveTypeConverter))]
-	public class Curve
+	public class Curve : IJsonOnSerializing, IJsonOnDeserialized
 	{
 		
 
@@ -110,39 +110,87 @@ namespace VixenModules.App.Curves
 
 		[DataMember] protected string _libraryReferenceName;
 
-		// Bezier handle data is stored on each PointPair's Tag field for in-memory use,
-		// but PointPair.Tag uses ISerializable which DataContractSerializer doesn't go through.
-		// To preserve Bezier handles through save/reload, we snapshot them into a dictionary
-		// (indexed by point position) during serialization, and restore on deserialization.
-		[DataMember] private Dictionary<int, BezierHandleData> _bezierHandlesSnapshot;
+		// Bezier handle data is stored on each PointPair's Tag field for in-memory use, but
+		// PointPair.Tag is an untyped object that neither serializer can round-trip on its own:
+		// DataContractSerializer goes through ISerializable, and System.Text.Json (used by the
+		// drag/drop helpers) revives an object-declared member as a JsonElement. To preserve
+		// Bezier handles across both, we snapshot them into a typed dictionary (indexed by point
+		// position) during serialization and restore them on deserialization.
+		[DataMember]
+		[JsonInclude]
+		[JsonPropertyName("_bezierHandlesSnapshot")]
+		private Dictionary<int, BezierHandleData> _bezierHandlesSnapshot;
 
 		[OnSerializing]
 		internal void OnSerializingBezierHandles(StreamingContext context)
 		{
-			if (Points == null) { _bezierHandlesSnapshot = null; return; }
-
-			Dictionary<int, BezierHandleData> snapshot = null;
-			for (int i = 0; i < Points.Count; i++)
-			{
-				if (Points[i].Tag is BezierHandleData handle)
-				{
-					snapshot ??= new Dictionary<int, BezierHandleData>();
-					snapshot[i] = handle;
-				}
-			}
-			_bezierHandlesSnapshot = snapshot;
+			CaptureBezierHandles();
 		}
 
 		[OnDeserialized]
 		internal void OnDeserializedBezierHandles(StreamingContext context)
 		{
-			if (_bezierHandlesSnapshot == null || Points == null) return;
+			RestoreBezierHandles();
+		}
+
+		/// <inheritdoc />
+		void IJsonOnSerializing.OnSerializing()
+		{
+			CaptureBezierHandles();
+		}
+
+		/// <inheritdoc />
+		void IJsonOnDeserialized.OnDeserialized()
+		{
+			RestoreBezierHandles();
+		}
+
+		/// <summary>
+		/// Copies the Bezier handle data hanging off each point into <see cref="_bezierHandlesSnapshot"/>
+		/// so that it survives serialization.
+		/// </summary>
+		/// <remarks>
+		/// Any tag that is not <see cref="BezierHandleData"/> is cleared. <see cref="PointPair.Tag"/> is
+		/// declared as <see langword="object"/>, and a value the
+		/// <see cref="System.Runtime.Serialization.DataContractSerializer"/> does not recognize aborts
+		/// the whole sequence save, so unknown tags are dropped rather than allowed to reach the writer.
+		/// </remarks>
+		private void CaptureBezierHandles()
+		{
+			var points = Points;
+			if (points == null) { _bezierHandlesSnapshot = null; return; }
+
+			Dictionary<int, BezierHandleData> snapshot = null;
+			for (int i = 0; i < points.Count; i++)
+			{
+				var point = points[i];
+				if (point.Tag is BezierHandleData handle)
+				{
+					snapshot ??= new Dictionary<int, BezierHandleData>();
+					snapshot[i] = handle;
+				}
+				else if (point.Tag != null)
+				{
+					point.Tag = null;
+				}
+			}
+			_bezierHandlesSnapshot = snapshot;
+		}
+
+		/// <summary>
+		/// Restores the Bezier handle data captured in <see cref="_bezierHandlesSnapshot"/> back onto
+		/// the matching points.
+		/// </summary>
+		private void RestoreBezierHandles()
+		{
+			var points = Points;
+			if (_bezierHandlesSnapshot == null || points == null) return;
 
 			foreach (var kvp in _bezierHandlesSnapshot)
 			{
-				if (kvp.Key >= 0 && kvp.Key < Points.Count)
+				if (kvp.Key >= 0 && kvp.Key < points.Count)
 				{
-					Points[kvp.Key].Tag = kvp.Value;
+					points[kvp.Key].Tag = kvp.Value;
 				}
 			}
 		}

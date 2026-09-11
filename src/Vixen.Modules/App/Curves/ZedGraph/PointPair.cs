@@ -18,6 +18,7 @@
 //=============================================================================
 
 using System.Runtime.Serialization;
+using System.Text.Json.Serialization;
 #if (!DOTNET1)
 // Is this a .Net 2 compilation?
 
@@ -48,10 +49,21 @@ namespace ZedGraph {
 		/// within the <see cref="ZedGraphControl"/> object.
 		/// </summary>
 		/// <remarks>
+		/// <para>
 		/// Note that, if you are going to Serialize ZedGraph data, then any type
 		/// that you store in <see cref="Tag"/> must be a serializable type (or
 		/// it will cause an exception).
+		/// </para>
+		/// <para>
+		/// This field is excluded from <c>System.Text.Json</c> serialization. Because it is
+		/// declared as <see langword="object"/>, JSON has no way to recover the original runtime
+		/// type on read and would revive it as a <c>JsonElement</c>, which the
+		/// <see cref="System.Runtime.Serialization.DataContractSerializer"/> used to save sequences
+		/// cannot write. Vixen stores <see cref="BezierHandleData"/> here; that data is carried
+		/// across JSON by <c>Curve</c>, which snapshots it into a typed member instead.
+		/// </para>
 		/// </remarks>
+		[JsonIgnore]
 		public object Tag;
 
 		#endregion
@@ -196,7 +208,24 @@ namespace ZedGraph {
 			base.GetObjectData(info, context);
 			info.AddValue("schema2", schema2);
 			info.AddValue("Z", Z);
-			info.AddValue("Tag", Tag);
+			info.AddValue("Tag", GetSerializableTag());
+		}
+
+		/// <summary>
+		/// Returns <see cref="Tag"/> when it holds a type the sequence serializer can write, and
+		/// <see langword="null"/> when it does not.
+		/// </summary>
+		/// <returns>The tag to serialize, or <see langword="null"/> to serialize no tag.</returns>
+		/// <remarks>
+		/// <see cref="Tag"/> is declared as <see langword="object"/>, so anything at all can end up on
+		/// it, but a value the <see cref="DataContractSerializer"/> has no contract for does not fail
+		/// on its own — it aborts the whole sequence save. Dropping such a tag here costs nothing that
+		/// matters: ZedGraph only ever reads a <see cref="string"/> tag, and Vixen's own use of the
+		/// field, <see cref="BezierHandleData"/>, is additionally carried in a typed member on
+		/// <c>Curve</c> and restored from there on load.
+		/// </remarks>
+		private object GetSerializableTag() {
+			return Tag is null or string or BezierHandleData ? Tag : null;
 		}
 
 		#endregion
