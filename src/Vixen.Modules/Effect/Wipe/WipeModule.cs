@@ -587,6 +587,24 @@ namespace VixenModules.Effect.Wipe
 				startTime += timeInterval;
 			}
 			double pos = ((double)100 / _pulsePercent) / 100;
+
+			// Wipe On and Wipe Off hold each element out to the end and the start of the effect, and
+			// hand over to the band at the moment the band is brightest over that element. Handing
+			// over at the band's outer edge instead would put the seam where the Brightness curve is
+			// usually at its darkest, which shows up as the band, a gap of black, then a hard line
+			// into the held section.
+			// The handover times come from the movement steps rather than from the elements the band
+			// actually landed on. A quick movement strides further than the band is wide and skips
+			// element positions outright; a gap in the band itself lasts one frame and goes unnoticed,
+			// but a gap in a hold lasts to the end of the effect and reads as a stripe. Working from
+			// the movement lets the strided-over positions be filled in.
+			TimeSpan?[] wipeOffAt = WipeOff ? new TimeSpan?[renderNodes.Count] : null;
+			TimeSpan?[] wipeOnAt = WipeOn ? new TimeSpan?[renderNodes.Count] : null;
+			if (wipeOffAt != null || wipeOnAt != null)
+			{
+				RecordWipeFront(renderElements, renderNodes.Count, pos, burst, wipeOffAt, wipeOnAt);
+			}
+
 			// Now render element
 			foreach (var wipeNode in renderElements)
 			{
@@ -616,6 +634,194 @@ namespace VixenModules.Effect.Wipe
 					}
 				}
 			}
+
+			if (WipeOff) RenderWipeOffLeadIn(renderNodes, wipeOffAt);
+			if (WipeOn) RenderWipeOnHold(renderNodes, wipeOnAt);
+		}
+
+		/// <summary>
+		/// Walks the movement steps and records when the brightest part of the band passed each element
+		/// position, filling in the positions a quick movement strode straight over.
+		/// </summary>
+		/// <remarks>
+		/// A movement step can move the band by more than its own width, so the positions the band
+		/// lands on are not a continuous run. Every position between one step and the next is treated
+		/// as swept by that step, which keeps the wipe front continuous at any speed.
+		/// </remarks>
+		/// <param name="renderElements">The movement steps, in time order.</param>
+		/// <param name="positionCount">How many element positions the wipe travels across.</param>
+		/// <param name="pos">The gradient step between one element of the band and the next.</param>
+		/// <param name="burst">The element offset the band carries for a Diagonal Up wipe.</param>
+		/// <param name="firstPass">Receives the start of the first sweep over each position. May be null.</param>
+		/// <param name="lastPass">Receives the end of the last sweep over each position. May be null.</param>
+		private void RecordWipeFront(List<WipeClass> renderElements, int positionCount, double pos, int burst,
+			TimeSpan?[] firstPass, TimeSpan?[] lastPass)
+		{
+			int forwardOffset = GetBrightestBandOffset(pos, 0);
+			int reversedOffset = GetBrightestBandOffset(pos, 1);
+			int previousIndex = int.MinValue;
+
+			foreach (var wipeNode in renderElements)
+			{
+				int index = wipeNode.ElementIndex + burst -
+				            (wipeNode.ReverseColorDirection == 0 ? forwardOffset : reversedOffset);
+
+				int step = index < previousIndex ? -1 : 1;
+				int from = previousIndex == int.MinValue || index == previousIndex ? index : previousIndex + step;
+
+				for (int position = from; position != index + step; position += step)
+				{
+					if (position < 0 || position >= positionCount) continue;
+
+					if (firstPass != null) firstPass[position] ??= wipeNode.StartTime;
+					if (lastPass != null) lastPass[position] = wipeNode.StartTime + wipeNode.Duration;
+				}
+
+				previousIndex = index;
+			}
+		}
+
+		/// <summary>
+		/// Finds which element of the band carries the brightest part of the Brightness curve.
+		/// </summary>
+		/// <param name="pos">The gradient step between one element of the band and the next.</param>
+		/// <param name="reverseColorDirection">
+		/// 1 when the band's profile is mirrored because the movement is running backwards, otherwise 0.
+		/// </param>
+		/// <returns>The offset into the band, counted the way the render loop counts it, of its brightest element.</returns>
+		private int GetBrightestBandOffset(double pos, int reverseColorDirection)
+		{
+			int brightestOffset = 0;
+			double brightestValue = double.MinValue;
+
+			for (int offset = 0; offset < _pulsePercent; offset++)
+			{
+				double position = reverseColorDirection - pos * offset;
+				if (position < 0) position = -position;
+
+				double value = _data.Curve.GetValue(position * 100);
+				if (value > brightestValue)
+				{
+					brightestValue = value;
+					brightestOffset = offset;
+				}
+			}
+
+			return brightestOffset;
+		}
+
+		/// <summary>
+		/// Lights every element at the wipe's brightest value from the start of the effect until the
+		/// wipe front reaches it, so the wipe reads as switching the elements off as it passes.
+		/// </summary>
+		/// <remarks>
+		/// The hold runs up to the band's peak rather than to its leading edge, so it covers the half
+		/// of the band that is still on its way up. That is what keeps the seam invisible whatever
+		/// shape the Brightness curve has: the element stays lit, and the only part of the band it
+		/// shows is the fall away from the peak. A position the wipe never sweeps is never switched
+		/// off, so it stays lit for the whole effect.
+		/// </remarks>
+		/// <param name="renderNodes">Every element group the wipe travels across, in wipe order.</param>
+		/// <param name="wipeOffAt">When the wipe front first swept each position, or null where it never did.</param>
+		private void RenderWipeOffLeadIn(List<IElementNode[]> renderNodes, TimeSpan?[] wipeOffAt)
+		{
+			var (level, color) = GetBrightestWipeValue();
+			var holdUntil = new Dictionary<IElementNode, TimeSpan>();
+
+			for (int position = 0; position < renderNodes.Count; position++)
+			{
+				TimeSpan until = wipeOffAt[position] ?? TimeSpan;
+
+				foreach (var element in renderNodes[position])
+				{
+					if (element == null) continue;
+
+					// Burst and Diamond list some elements at two positions; the earlier sweep switches it off.
+					if (!holdUntil.TryGetValue(element, out var current) || until < current)
+					{
+						holdUntil[element] = until;
+					}
+				}
+			}
+
+			foreach (var (element, until) in holdUntil)
+			{
+				if (until <= TimeSpan.Zero) continue;
+
+				_elementData.Add(PulseRenderer.RenderNode(element, level, color, until));
+			}
+		}
+
+		/// <summary>
+		/// Leaves every element the wipe sweeps lit at the wipe's brightest value from the moment the
+		/// wipe front passes it through to the end of the effect.
+		/// </summary>
+		/// <remarks>
+		/// The hold starts at the band's peak rather than at its trailing edge, so it covers the half
+		/// of the band that is on its way back down and the element never drops out before the hold
+		/// takes over. A position the wipe never sweeps is never switched on, so it is left alone.
+		/// </remarks>
+		/// <param name="renderNodes">Every element group the wipe travels across, in wipe order.</param>
+		/// <param name="wipeOnAt">When the wipe front last swept each position, or null where it never did.</param>
+		private void RenderWipeOnHold(List<IElementNode[]> renderNodes, TimeSpan?[] wipeOnAt)
+		{
+			var (level, color) = GetBrightestWipeValue();
+			var holdFrom = new Dictionary<IElementNode, TimeSpan>();
+
+			for (int position = 0; position < renderNodes.Count; position++)
+			{
+				var swept = wipeOnAt[position];
+				if (!swept.HasValue) continue;
+
+				foreach (var element in renderNodes[position])
+				{
+					if (element == null) continue;
+
+					// Burst and Diamond list some elements at two positions; the later sweep leaves it on.
+					if (!holdFrom.TryGetValue(element, out var current) || swept.Value > current)
+					{
+						holdFrom[element] = swept.Value;
+					}
+				}
+			}
+
+			foreach (var (element, from) in holdFrom)
+			{
+				if (from >= TimeSpan) continue;
+
+				var result = PulseRenderer.RenderNode(element, level, color, TimeSpan - from);
+				result.OffsetAllCommandsByTime(from);
+				_elementData.Add(result);
+			}
+		}
+
+		/// <summary>
+		/// Finds the brightest point of the Brightness curve, which is the value Wipe On and Wipe Off
+		/// hold elements at, along with the gradient color at that same point.
+		/// </summary>
+		/// <remarks>
+		/// The peak is what the Count movement ends up holding too: it extends every intent of the
+		/// pulse, so the overlapping holds add up to the brightest part of the pulse rather than to
+		/// its end points. Taking the peak directly also means the default Brightness curve, which
+		/// starts and ends at zero, still holds something visible.
+		/// </remarks>
+		/// <returns>The brightest level as a 0-1 intensity, and the gradient color at that point.</returns>
+		private (double Level, Color Color) GetBrightestWipeValue()
+		{
+			double peakPosition = 0;
+			double peakValue = _data.Curve.GetValue(0);
+
+			for (int position = 1; position <= 100; position++)
+			{
+				double value = _data.Curve.GetValue(position);
+				if (value > peakValue)
+				{
+					peakValue = value;
+					peakPosition = position;
+				}
+			}
+
+			return (peakValue / 100, _data.ColorGradient.GetColorAt(peakPosition / 100));
 		}
 
 		private int GetMaxSteps(Point centerPoint)
@@ -1014,8 +1220,8 @@ namespace VixenModules.Effect.Wipe
 			{
 				{"PassCount", WipeMovement == WipeMovement.Count},
 				{"PulsePercent", WipeMovement != WipeMovement.PulseLength},
-				{"WipeOn", WipeMovement == WipeMovement.Count},
-				{"WipeOff", WipeMovement == WipeMovement.Count},
+				{"WipeOn", WipeMovement != WipeMovement.PulseLength},
+				{"WipeOff", WipeMovement != WipeMovement.PulseLength},
 				{"PulseTime", WipeMovement == WipeMovement.PulseLength},
 				{"ColorHandling", WipeMovement != WipeMovement.Movement},
 				{"WipeMovementDirection", WipeMovement == WipeMovement.Movement },
