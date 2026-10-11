@@ -33,7 +33,11 @@
 		<ProjectReference Include="..\Vixen.Modules\App\LivePreview\LivePreview.csproj" />
 		<ProjectReference Include="..\Vixen.Modules\App\Marks\Marks.csproj" />
 		<ProjectReference Include="..\Vixen.Modules\Analysis\BeatsAndBars\BeatsAndBars.csproj" />
-		<ProjectReference Include="..\Vixen.Modules\Analysis\QMLibrary\QMLibrary.vcxproj" />
+		<Reference Include="QMLibrary" Condition="'$(UsePrebuiltNative)' == 'true'">
+			<HintPath>$(SolutionDir)build-native\QMLibrary.dll</HintPath>
+			<Private>true</Private>
+		</Reference>
+		<ProjectReference Include="..\Vixen.Modules\Analysis\QMLibrary\QMLibrary.vcxproj" Condition="'$(UsePrebuiltNative)' != 'true'" />
 		<ProjectReference Include="..\Vixen.Modules\OutputFilter\CoarseFineBreakdown\CoarseFineBreakdown.csproj" />
 		<ProjectReference Include="..\Vixen.Modules\Effect\Chase\Chase.csproj" />
 		<ProjectReference Include="..\Vixen.Modules\Effect\Dissolve\Dissolve.csproj" />

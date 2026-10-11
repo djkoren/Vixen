@@ -56,5 +56,12 @@ if ($LASTEXITCODE -ne 0) { Write-Host "BUILD FAILED" -ForegroundColor Red; exit 
 $outDir = Join-Path $root "$Configuration\Output"
 Copy-Item (Join-Path $root 'build-native\Ijwhost.dll') $outDir -Force
 
+# The test project builds to its own folder (src\Vixen.Tests\Directory.Build.props), and its Liquid
+# and QMLibrary tests load the same mixed-mode assemblies, so it needs the shim too.
+$testOutDir = Join-Path $root "src\Vixen.Tests\bin\$Configuration"
+if (Test-Path $testOutDir) {
+    Copy-Item (Join-Path $root 'build-native\Ijwhost.dll') $testOutDir -Force
+}
+
 Write-Host ""
 Write-Host "BUILD OK -> $outDir\Vixen.Application.exe" -ForegroundColor Green
