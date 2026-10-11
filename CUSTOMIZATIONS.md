@@ -1,14 +1,16 @@
 # Fork customizations
 
 This fork tracks upstream [VixenLights/Vixen](https://github.com/VixenLights/Vixen) and adds six
-features. The base is the upstream tag **`DevBuild-1469`** (commit `b917b255`, 2026-07-23), which
-this tree matches byte-for-byte before the feature commits.
+features. This branch, **`main-1549`**, is based on the upstream tag **`DevBuild-1549`** (commit
+`bf2f592b`, 2026-10-09), which this tree matches byte-for-byte before the feature commits. It is a
+port of everything on `main`, which stays on `DevBuild-1469` and is untouched by it.
 
 ## Branch layout
 
 | Branch | Contents |
 |---|---|
-| `main` | `DevBuild-1469` + all six features merged + solution wiring. **Build this one.** |
+| `main-1549` | `DevBuild-1549` + every customization from `main`, ported. **Build this one for 1549.** |
+| `main` | `DevBuild-1469` + all six features merged + solution wiring. The 1469 line, left as it was. |
 | `feature/bezier-curves` | one feature, on top of `DevBuild-1469` |
 | `feature/curve-gradient-editor` | " |
 | `feature/lightning-effect` | " |
@@ -18,15 +20,38 @@ this tree matches byte-for-byte before the feature commits.
 | `vendor/3.12u6` | the four features as they existed on their **original** base (upstream tag `3.12u6`) |
 | `vendor/1393` | timecode + marquee as they existed on their original base (tag `DevBuild-1393`) |
 
-Each `feature/*` branch holds exactly one self-contained commit, so a feature can be cherry-picked
-onto a future dev build on its own. The `vendor/*` branches preserve each feature against the
-baseline it was actually written on, which is what makes those cherry-picks merge accurately.
+Each `feature/*` branch holds the feature's original self-contained commit. They were not kept up to
+date as later fixes landed on `main`, so port from a `main-NNNN` line rather than from them. The
+`vendor/*` branches preserve each feature against the baseline it was actually written on.
 
-To move onto a newer upstream build later:
+To move onto a newer upstream build later, replay this line's commits onto the new tag (this is how
+`main-1549` was made from `main`):
 
 ```bash
-git fetch upstream --tags && git checkout -b main-NNNN DevBuild-NNNN && git cherry-pick <each feature commit>
+git fetch upstream tag DevBuild-NNNN
+git checkout -b main-NNNN DevBuild-NNNN
+git cherry-pick $(git rev-list --reverse --topo-order --no-merges DevBuild-1549..main-1549)
 ```
+
+Then check whether the prebuilt native DLLs need refreshing (see
+[`build-native/README.md`](build-native/README.md)) and build with `.\build.ps1`.
+
+## Porting notes: DevBuild-1469 → DevBuild-1549
+
+Upstream moved 424 commits between the two tags. Of our 27 commits, 26 replayed unchanged; the
+rest of the port was adapting to upstream API changes:
+
+- **Timecode chase** — upstream rewrote `SequenceExecutor`'s playback lifecycle and dropped its
+  start-up spin-wait. The executor now needs only two seams (`_ResolveTimingSource`,
+  `_IsEndOfSequence`); the old `_WaitForTimingSourceToStart` seam and its no-op override in
+  `TimecodeChaseExecutor` are gone along with the spin-wait they existed to skip.
+- **Lightning** — `BaseEffect.MarkCollectionsChanged` is now sealed. Lightning moved onto
+  `MarkCollectionsChangedCore` and `IMarkCollectionSelection`/`IMarkCollectionSelector`, exactly as
+  upstream did for Strobe.
+- **No-Visual-Studio build** — upstream added QMLibrary and Liquid tests, so `Vixen.Tests` got the
+  same `UsePrebuiltNative` reference switch and `build.ps1` copies `Ijwhost.dll` beside the tests.
+  Upstream also changed QMLibrary itself, so `build-native\QMLibrary.dll` must come from a 1549
+  build (see that folder's README).
 
 ## The features
 
