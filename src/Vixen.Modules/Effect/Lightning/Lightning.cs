@@ -14,7 +14,7 @@ using ZedGraph;
 
 namespace VixenModules.Effect.Lightning
 {
-	public class Lightning : BaseEffect
+	public class Lightning : BaseEffect, IMarkCollectionSelection, IMarkCollectionSelector
 	{
 		private EffectIntents _elementData;
 		private LightningData _data;
@@ -626,6 +626,17 @@ namespace VixenModules.Effect.Lightning
 			get { return _data; }
 		}
 
+		/// <inheritdoc />
+		protected override IEnumerable<IMarkCollectionSelection> GetMarkCollectionSelections()
+		{
+			yield return this;
+		}
+
+		bool IMarkCollectionSelection.IsActive => LightningSource == LightningSource.MarkCollection;
+		Guid IMarkCollectionSelection.MarkCollectionId { get => _data.MarkCollectionId; set => _data.MarkCollectionId = value; }
+		MarkCollectionType? IMarkCollectionSelection.PreferredCollectionType => null;
+		bool IMarkCollectionSelection.AllowsFirstCollectionFallback => true;
+
 		private void CheckForInvalidColorData()
 		{
 			var validColors = GetValidColors();
@@ -712,6 +723,7 @@ namespace VixenModules.Effect.Lightning
 			{
 				_data.LightningSource = value;
 				UpdateBrowsableAttributes();
+				ActivateMarkCollectionSelections();
 				IsDirty = true;
 				OnPropertyChanged();
 			}
@@ -1178,7 +1190,8 @@ namespace VixenModules.Effect.Lightning
 			protected set { base.IsDirty = value; }
 		}
 
-		protected override void MarkCollectionsChanged()
+		/// <inheritdoc />
+		protected override void MarkCollectionsChangedCore()
 		{
 			if (LightningSource == LightningSource.MarkCollection)
 			{
