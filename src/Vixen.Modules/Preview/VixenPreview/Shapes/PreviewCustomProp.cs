@@ -199,7 +199,7 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 				RotationAngle = customProp.RotationAngle;
 			}
 
-			Scale(xAspect, yAspect, Left, Top);
+			ScaleFromCorner(xAspect, yAspect, b => b.TopLeft);
 		}
 
 		/// <inheritdoc />
@@ -407,7 +407,7 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 					}
 					Layout();
 
-					Scale(scaleX, scaleY, ZoomCoordToOriginal(_dragPoints[2].X), ZoomCoordToOriginal(_dragPoints[2].Y));
+					ScaleFromCorner(scaleX, scaleY, b => b.BottomRight);
 
 					_selectionPoint = _dragPoints[0];
 
@@ -426,7 +426,7 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 						scaleX = scaleY = MaxValue(scaleX, scaleY);
 					}
 
-					Scale(scaleX, scaleY, ZoomCoordToOriginal(_dragPoints[3].X), ZoomCoordToOriginal(_dragPoints[3].Y));
+					ScaleFromCorner(scaleX, scaleY, b => b.BottomLeft);
 					Layout();
 
 					_selectionPoint = _dragPoints[1];
@@ -447,7 +447,7 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 						scaleX = scaleY = MaxValue(scaleX, scaleY);
 					}
 
-					Scale(scaleX, scaleY, ZoomCoordToOriginal(_dragPoints[0].X), ZoomCoordToOriginal(_dragPoints[0].Y));
+					ScaleFromCorner(scaleX, scaleY, b => b.TopLeft);
 					Layout();
 
 					_selectionPoint = _dragPoints[2];
@@ -467,7 +467,7 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 						scaleX = scaleY = MaxValue(scaleX, scaleY);
 					}
 
-					Scale(scaleX, scaleY, ZoomCoordToOriginal(_dragPoints[1].X), ZoomCoordToOriginal(_dragPoints[1].Y));
+					ScaleFromCorner(scaleX, scaleY, b => b.TopRight);
 					Layout();
 
 					_selectionPoint = _dragPoints[3];
@@ -632,6 +632,42 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 			Layout();
 		}
 
+		/// <summary>
+		/// Scales the prop while holding one corner of its unrotated bounds still on screen.
+		/// </summary>
+		/// <remarks>
+		/// The pixels are scaled before they are rotated, so the anchor has to be the unrotated corner rather than
+		/// the rotated drag point. Scaling also moves the rotation center, which carries the corner away on a rotated
+		/// prop, so the prop is shifted back by that drift.
+		/// </remarks>
+		private void ScaleFromCorner(double scaleX, double scaleY, Func<Rect, Point> corner)
+		{
+			var anchor = corner(Bounds);
+			var anchorOnScreen = RotateAboutCenter(anchor);
+
+			Scale(scaleX, scaleY, ZoomCoordToOriginal(anchor.X), ZoomCoordToOriginal(anchor.Y));
+
+			if (RotationAngle == 0) return;
+
+			var drift = anchorOnScreen - RotateAboutCenter(corner(Bounds));
+			Offset(ZoomCoordToOriginal(drift.X), ZoomCoordToOriginal(drift.Y));
+		}
+
+		private Point RotateAboutCenter(Point p)
+		{
+			return new RotateTransform(RotationAngle, _rotationCenter.X, _rotationCenter.Y).Transform(p);
+		}
+
+		private void Offset(double x, double y)
+		{
+			foreach (var previewPixel in PropPixels)
+			{
+				previewPixel.Location = new Point(previewPixel.Location.X + x, previewPixel.Location.Y + y);
+			}
+
+			Layout();
+		}
+
 		/// <inheritdoc />
 		public override bool PointInShape(PreviewPoint point)
 		{
@@ -670,16 +706,7 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 				y = 10;
 
 			}
-			var xOffset = ZoomCoordToOriginal(x - Bounds.X);
-			var yOffset = ZoomCoordToOriginal(y - Bounds.Y);
-			
-			foreach (var previewPixel in PropPixels)
-			{
-				var p = new Point(previewPixel.Location.X + xOffset, previewPixel.Location.Y + yOffset);
-				previewPixel.Location = p;
-			}
-
-			Layout();
+			Offset(ZoomCoordToOriginal(x - Bounds.X), ZoomCoordToOriginal(y - Bounds.Y));
 		}
 
 		/// <inheritdoc />

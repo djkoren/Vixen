@@ -9,6 +9,7 @@ using Xunit;
 
 namespace Vixen.Tests.Preview.VixenPreview;
 
+[Collection(VixenSystemConfigTestCollection.Name)]
 public sealed class PreviewCustomPropStateImportTests : IDisposable
 {
 	private readonly string _dataRootPath;

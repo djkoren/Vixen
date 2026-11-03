@@ -388,6 +388,15 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 								pixel.NodeId = _strings[i].Pixels[0].NodeId;
 							}
 						}
+						else if (shape is PreviewCustomProp customProp)
+						{
+							// A zoomed or rotated Custom Prop draws a copy of its PropPixels, and the Layout below
+							// rebuilds that copy, so link the PropPixels that are saved or the new links are lost.
+							if (pixelNum < customProp.PropPixels.Count)
+							{
+								customProp.PropPixels[pixelNum].Node = lightString.Pixels[pixelNum].Node;
+							}
+						}
 						else
 						{
 							shape.Pixels[pixelNum] = lightString.Pixels[pixelNum];
