@@ -86,6 +86,15 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 		[Browsable(false)]
 		public Rect Bounds { get; private set; }
 
+		/// <summary>
+		/// Gets the box the prop covers on the canvas once rotated, in zoomed canvas pixels.
+		/// </summary>
+		/// <remarks><see cref="Bounds"/> is the same box before rotation.</remarks>
+		[Browsable(false)]
+		public Rect CanvasBounds => RotationAngle == 0
+			? Bounds
+			: new RotateTransform(RotationAngle, _rotationCenter.X, _rotationCenter.Y).TransformBounds(Bounds);
+
 		internal void UpdateBounds()
 		{
 			var rects = Pixels.Select(p => new Rect(p.Location.X, p.Location.Y, p.PixelSize, p.PixelSize));
@@ -690,23 +699,34 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 			int X2 = Math.Max(p1.X, p2.X);
 			int Y1 = Math.Min(p1.Y, p2.Y);
 			int Y2 = Math.Max(p1.Y, p2.Y);
-			
-			var rt = new RotateTransform(RotationAngle, _rotationCenter.X, _rotationCenter.Y);
-			var b = rt.TransformBounds(Bounds);
+
+			var b = CanvasBounds;
 
 			return (b.Top >= Y1 && b.Bottom <= Y2 && b.Left >= X1 && b.Right <= X2);
 		}
 
-		/// <inheritdoc />
+		/// <summary>
+		/// Moves the prop so the top left of its unrotated <see cref="Bounds"/> is at the given point.
+		/// </summary>
+		/// <param name="x">The left edge, in zoomed canvas pixels.</param>
+		/// <param name="y">The top edge, in zoomed canvas pixels.</param>
+		/// <remarks>
+		/// A move that would push the prop off the top or left of the canvas puts the top left of its
+		/// <see cref="CanvasBounds"/> at 10,10 instead.
+		/// </remarks>
 		public override void MoveTo(int x, int y)
 		{
-			if(x < 0 || y < 0)
+			// Check the rotated box, since that is what is drawn. A rotated prop's unrotated box can hang
+			// off the edge while the prop itself is still on the canvas.
+			var canvasBounds = CanvasBounds;
+			var moveX = x - Bounds.X;
+			var moveY = y - Bounds.Y;
+			if (canvasBounds.Left + moveX < 0 || canvasBounds.Top + moveY < 0)
 			{
-				x = 10;
-				y = 10;
-
+				moveX = 10 - canvasBounds.Left;
+				moveY = 10 - canvasBounds.Top;
 			}
-			Offset(ZoomCoordToOriginal(x - Bounds.X), ZoomCoordToOriginal(y - Bounds.Y));
+			Offset(ZoomCoordToOriginal(moveX), ZoomCoordToOriginal(moveY));
 		}
 
 		/// <inheritdoc />

@@ -1185,22 +1185,23 @@ namespace VixenModules.Preview.VixenPreview
 			}
 		}
 
-		private void StartMove(int x, int y, bool paste = false)
+		private void StartMove(int x, int y)
 		{
 			dragStart.X = x;
 			dragStart.Y = y;
 
-			// If paste is true, then we'll send a point of 0,0 which indicates a full position reset.
+			// A null select point means "move the whole shape". Paste uses it too, so pasted shapes follow
+			// the mouse. Most shapes take any other point as a handle being dragged and stay put.
 			if (SelectedDisplayItems.Any())
 			{
 				foreach (DisplayItem item in SelectedDisplayItems)
 				{
-					item.Shape.SetSelectPoint(paste ? new PreviewPoint(0,0) : null);
+					item.Shape.SetSelectPoint(null);
 				}
 			}
 			else if (_selectedDisplayItem != null)
 			{
-				_selectedDisplayItem.Shape.SetSelectPoint(paste ? new PreviewPoint(0,0) : null);
+				_selectedDisplayItem.Shape.SetSelectPoint(null);
 			}
 			Capture = true;
 			_mouseCaptured = true;
@@ -2157,29 +2158,75 @@ namespace VixenModules.Preview.VixenPreview
 					newDisplayItem.ZoomLevel = ZoomLevel;
 				}
 
-				// move the prop to the mouse position
-				Point mousePoint = PointToClient(MousePosition);
+				// Put what was pasted under the mouse, or at the nearest visible spot when the mouse is off the
+				// canvas, such as when Paste is picked from the menu bar.
+				Point mousePoint = ClampToVisibleCanvas(PointToClient(MousePosition));
 				mousePoint.X += hScroll.Value;
 				mousePoint.Y += vScroll.Value;
-				Point moveToPoint = PointToZoomPoint(mousePoint);
-
-				int top = int.MaxValue;
-				int left = int.MaxValue;
-				foreach (DisplayItem item in SelectedDisplayItems)
-				{
-					top = Math.Min(top, item.Shape.Top);
-					left = Math.Min(left, item.Shape.Left);
-				}
-				int deltaY = top - moveToPoint.Y;
-				int deltaX = left - moveToPoint.X;
-				foreach (DisplayItem item in SelectedDisplayItems)
-				{
-					item.Shape.Left -= deltaX;
-					item.Shape.Top -= deltaY;
-				}
-				StartMove(mousePoint.X, mousePoint.Y, true);
+				MoveShapesOnCanvas(SelectedDisplayItems.Select(item => item.Shape).ToList(), mousePoint, ZoomLevel);
+				StartMove(mousePoint.X, mousePoint.Y);
 				EndUpdate();
 			}
+		}
+
+		private Point ClampToVisibleCanvas(Point clientPoint)
+		{
+			var width = Width - (vScroll.Visible ? vScroll.Width : 0);
+			var height = Height - (hScroll.Visible ? hScroll.Height : 0);
+			return new Point(
+				Math.Clamp(clientPoint.X, 0, Math.Max(0, width - 1)),
+				Math.Clamp(clientPoint.Y, 0, Math.Max(0, height - 1)));
+		}
+
+		/// <summary>
+		/// Moves shapes together so the top left of the area they cover lands on a canvas point.
+		/// </summary>
+		/// <remarks>
+		/// <paramref name="target"/> is in zoomed canvas pixels. Custom Props keep their position in those pixels,
+		/// while the other shapes keep theirs unzoomed, so each shape is converted before it is compared or moved.
+		/// </remarks>
+		private static void MoveShapesOnCanvas(List<PreviewBaseShape> shapes, Point target, double zoomLevel)
+		{
+			if (shapes.Count == 0)
+			{
+				return;
+			}
+
+			var moveX = target.X - shapes.Min(shape => CanvasTopLeft(shape, zoomLevel).X);
+			var moveY = target.Y - shapes.Min(shape => CanvasTopLeft(shape, zoomLevel).Y);
+			foreach (var shape in shapes)
+			{
+				if (shape is PreviewCustomProp prop)
+				{
+					prop.MoveTo((int)Math.Round(prop.Bounds.X + moveX), (int)Math.Round(prop.Bounds.Y + moveY));
+				}
+				else
+				{
+					shape.Left += (int)Math.Round(moveX / zoomLevel);
+					shape.Top += (int)Math.Round(moveY / zoomLevel);
+
+					// A pasted shape still rotates about the center of the shape it was copied from. Move that
+					// point to its own center, or a rotated shape swings around the original instead.
+					if (shape.RotationAxis != null)
+					{
+						var center = shape.Center;
+						shape.RotationAxis.X = center.X;
+						shape.RotationAxis.Y = center.Y;
+						shape.Layout();
+					}
+				}
+			}
+		}
+
+		private static PointF CanvasTopLeft(PreviewBaseShape shape, double zoomLevel)
+		{
+			if (shape is PreviewCustomProp prop)
+			{
+				var bounds = prop.CanvasBounds;
+				return new PointF((float)bounds.Left, (float)bounds.Top);
+			}
+
+			return new PointF((float)(shape.Left * zoomLevel), (float)(shape.Top * zoomLevel));
 		}
 
 		public void Delete()
