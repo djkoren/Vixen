@@ -183,14 +183,14 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 				{
 					ElementNode channelNode = treeNode.Tag as ElementNode;
 
-					SetLinkedElementItems(item, channelNode);
-
-					if (item.Index == listLinkedElements.Items.Count - 1)
+					// A group fills a row per element, so the next dropped node starts after the rows it filled.
+					var nextIndex = item.Index + SetLinkedElementItems(item, channelNode);
+					if (nextIndex >= listLinkedElements.Items.Count)
 					{
 						break;
 					}
 
-					item = listLinkedElements.Items[item.Index + 1];
+					item = listLinkedElements.Items[nextIndex];
 				}
 				else
 				{
@@ -290,42 +290,54 @@ namespace VixenModules.Preview.VixenPreview.Shapes
 			UpdateListLinkedElements();
 		}
 
-		private void SetLinkedElementItems(ListViewItem item, ElementNode channelNode)
+		/// <summary>
+		/// Links an element, or every element in a group and its sub-groups, to consecutive rows starting at
+		/// <paramref name="item"/>.
+		/// </summary>
+		/// <returns>The number of rows that were linked.</returns>
+		/// <remarks>
+		/// Elements are taken in tree order. An element that sits under more than one sub-group is linked once,
+		/// so a group that lists the same lights in two sub-groups still fills one row per light.
+		/// </remarks>
+		private int SetLinkedElementItems(ListViewItem item, ElementNode channelNode)
 		{
-			if (channelNode != null && item != null && item.Tag is PreviewPixel pixel)
+			if (channelNode == null || item == null)
 			{
-				// Is this node an element?
-				if (channelNode.Element != null)
+				return 0;
+			}
+
+			var elements = channelNode.GetLeafEnumerator()
+				.Where(node => node.Element != null)
+				.DistinctBy(node => node.Id);
+			var rowIndex = item.Index;
+			foreach (var element in elements)
+			{
+				if (rowIndex >= listLinkedElements.Items.Count)
 				{
-					pixel.Node = channelNode;
-					if (item.SubItems.Count > 1)
-					{
-						item.SubItems[1].Text = channelNode.Name;
-					}
-					else
-					{
-						item.SubItems.Add(channelNode.Name);
-					}
+					break;
 				}
-				else // This node is a group, iterate
-				{
-					ListViewItem nextItem = item;
-					foreach (ElementNode child in channelNode.Children)
-					{
-						if (item.Index < listLinkedElements.Items.Count && child.Element != null)
-						{
-							SetLinkedElementItems(nextItem, child);
-							if (nextItem.Index == listLinkedElements.Items.Count - 1)
-							{
-								return;
-							}
-							else
-							{
-								nextItem = listLinkedElements.Items[nextItem.Index + 1];
-							}
-						}
-					}
-				}
+				LinkRow(listLinkedElements.Items[rowIndex], element);
+				rowIndex++;
+			}
+
+			return rowIndex - item.Index;
+		}
+
+		private static void LinkRow(ListViewItem item, ElementNode element)
+		{
+			if (item.Tag is not PreviewPixel pixel)
+			{
+				return;
+			}
+
+			pixel.Node = element;
+			if (item.SubItems.Count > 1)
+			{
+				item.SubItems[1].Text = element.Name;
+			}
+			else
+			{
+				item.SubItems.Add(element.Name);
 			}
 		}
 
